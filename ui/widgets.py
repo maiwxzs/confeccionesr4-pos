@@ -8,11 +8,12 @@ import logging
 import traceback
 from typing import Any, Callable
 
-from PySide6.QtCore import (QEasingCurve, QObject, QPropertyAnimation, QRunnable, Qt, QThreadPool,
+from PySide6.QtCore import (QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRect, QRunnable, QSize, Qt,
+                            QThreadPool,
                             QTimer, Signal, Slot)
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QLabel, QLineEdit,
-                               QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
+                               QLayout, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 import config as cfg
 
@@ -373,9 +374,9 @@ def exportar_y_ofrecer_abrir(parent: QWidget, ctx: "Contexto", nombre: str, fn: 
 
 
 class Desplazable(QScrollArea):
-    """Envuelve una pantalla para que, en monitores pequeños (1366×768, zoom 125 %), aparezca una
-    barra para bajar en lugar de amontonar tarjetas, tablas y totales unos encima de otros.
-    `alto_minimo`: altura por debajo de la cual el contenido deja de encogerse y se desplaza."""
+    """Envuelve una pantalla para que, en monitores pequeños (1366×768), aparezca una barra para
+    bajar en lugar de amontonar tarjetas, tablas y totales unos encima de otros.
+    El contenido nunca se encoge por debajo de lo que su diseño necesita (ni de `alto_minimo`)."""
 
     def __init__(self, contenido: QWidget, alto_minimo: int = 0, parent: QWidget | None = None):
         super().__init__(parent)
@@ -384,12 +385,91 @@ class Desplazable(QScrollArea):
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        if alto_minimo:
-            contenido.setMinimumHeight(alto_minimo)
+        self.alto_minimo = int(alto_minimo or 0)
         self.setWidget(contenido)
         self.verticalScrollBar().setSingleStep(30)
         self.contenido = contenido
+        contenido.installEventFilter(self)
+        self._ajustar()
+
+    def _ajustar(self) -> None:
+        # Un mínimo fijo REEMPLAZA al que calcula el diseño (Qt usa uno u otro): por eso se toma
+        # siempre el mayor de los dos y se recalcula cuando el diseño cambia.
+        lay = self.contenido.layout()
+        necesario = lay.minimumSize().height() if lay is not None else 0
+        objetivo = max(self.alto_minimo, int(necesario or 0))
+        if self.contenido.minimumHeight() != objetivo:
+            self.contenido.setMinimumHeight(objetivo)
+
+    def eventFilter(self, obj, ev) -> bool:  # noqa: N802
+        if obj is self.contenido and ev.type() in (QEvent.Type.LayoutRequest, QEvent.Type.Show):
+            self._ajustar()
+        return False
+
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        self._ajustar()
+        super().resizeEvent(e)
 
 
 def desplazable(contenido: QWidget, alto_minimo: int = 0) -> "Desplazable":
     return Desplazable(contenido, alto_minimo)
+
+
+class FlujoLayout(QLayout):
+    """Fila de botones que salta a la línea siguiente cuando no cabe (en vez de salirse de la pantalla)."""
+
+    def __init__(self, parent: QWidget | None = None, espacio: int = 8):
+        super().__init__(parent)
+        self._items: list = []
+        self._esp = espacio
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item) -> None:  # noqa: N802
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, i: int):  # noqa: N802
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i: int):  # noqa: N802
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, ancho: int) -> int:  # noqa: N802
+        return self._acomodar(QRect(0, 0, ancho, 0), True)
+
+    def setGeometry(self, r) -> None:  # noqa: N802
+        super().setGeometry(r)
+        self._acomodar(r, False)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:  # noqa: N802
+        s = QSize()
+        for it in self._items:
+            s = s.expandedTo(it.minimumSize())
+        return s
+
+    def _acomodar(self, r, prueba: bool) -> int:
+        x, y, alto_fila = r.x(), r.y(), 0
+        derecha = r.x() + r.width()
+        for it in self._items:
+            w = it.widget()
+            if w is not None and w.isHidden():
+                continue
+            h = it.sizeHint()
+            if x + h.width() > derecha and alto_fila > 0:
+                x, y, alto_fila = r.x(), y + alto_fila + self._esp, 0
+            if not prueba:
+                it.setGeometry(QRect(QPoint(x, y), h))
+            x += h.width() + self._esp
+            alto_fila = max(alto_fila, h.height())
+        return y + alto_fila - r.y()

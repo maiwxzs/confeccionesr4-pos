@@ -77,7 +77,7 @@ class TarjetaDelegate(QStyledItemDelegate):
         self.destello_alfa = 0.0
 
     def set_compacto(self, on: bool) -> None:
-        self.ANCHO, self.ALTO = (172, 112) if on else (192, 132)
+        self.ANCHO, self.ALTO = (164, 112) if on else (192, 132)
         self.f_nombre.setPointSize(9 if on else 10)
         self.f_precio.setPointSize(13 if on else 15)
 
@@ -314,9 +314,10 @@ class POSView(QWidget):
         h = self.tabla.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        h.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         self.tabla.setColumnWidth(1, 128)
+        self.tabla.setColumnWidth(2, 112)
         self.tabla.setColumnWidth(3, 72)
         self.tabla.verticalHeader().setVisible(False)
         self.tabla.verticalHeader().setDefaultSectionSize(58)
@@ -383,7 +384,8 @@ class POSView(QWidget):
         fila_rec = QHBoxLayout()
         col_rec = QVBoxLayout()
         col_rec.setSpacing(2)
-        col_rec.addWidget(etiqueta("Monto recibido", muted=True))
+        self.lbl_recibido = etiqueta("Monto recibido", muted=True)
+        col_rec.addWidget(self.lbl_recibido)
         self.recibido = MoneyEdit()
         col_rec.addWidget(self.recibido)
         fila_rec.addLayout(col_rec, 1)
@@ -393,6 +395,7 @@ class POSView(QWidget):
         cc.setContentsMargins(12, 4, 12, 4)
         cc.setSpacing(0)
         self.lbl_cambio_t = etiqueta("VUELTO / CAMBIO", muted=True)
+        self.lbl_cambio_t.setObjectName("cambioTitulo")
         self.lbl_cambio_t.setAlignment(AlignCenter)
         self.lbl_cambio = QLabel("$ 0")
         self.lbl_cambio.setObjectName("cambioLabel")
@@ -450,7 +453,8 @@ class POSView(QWidget):
         QLineEdit#search { font-size: 16px; min-height: 38px; }
         QLineEdit[money="true"] { font-size: 18px; min-height: 34px; }
         QLabel#totalLabel { font-size: 28px; }
-        QLabel#cambioLabel { font-size: 24px; }
+        QLabel#cambioLabel { font-size: 22px; }
+        QLabel#cambioTitulo { font-size: 11px; }
         QLabel[titulo="true"] { font-size: 15px; }
         QHeaderView::section { padding: 5px 6px; }
     """
@@ -469,9 +473,17 @@ class POSView(QWidget):
         self._der.setContentsMargins(*([10] * 4 if compacto else [14] * 4))
         self._der.setSpacing(6 if compacto else 10)
         self._pe_lay.setSpacing(6 if compacto else 8)
-        self.tabla.verticalHeader().setDefaultSectionSize(46 if compacto else 58)
-        self.tabla.setColumnWidth(1, 104 if compacto else 128)
-        self.tabla.setColumnWidth(3, 60 if compacto else 72)
+        self.tabla.setColumnWidth(1, 100 if compacto else 128)
+        self.tabla.setColumnWidth(2, 98 if compacto else 112)
+        self.tabla.setColumnWidth(3, 58 if compacto else 72)
+        self.tabla.verticalHeader().setDefaultSectionSize(52 if compacto else 58)
+        # En pantallas pequeñas el carrito gana espacio (las tarjetas se achican para que sigan cabiendo 4)
+        self._raiz.setStretch(0, 60 if compacto else 65)
+        self._raiz.setStretch(1, 40 if compacto else 35)
+        self.lbl_proximo.setVisible(not compacto)
+        self.lbl_recibido.setVisible(not compacto)
+        self.recibido.setPlaceholderText("Recibido $ 0" if compacto else "$ 0")
+        self.tabla.setMinimumHeight(90 if compacto else 110)
         self.btn_nueva.setText("NUEVA\n(F5)" if compacto else "NUEVA VENTA\n(F5)")
         self.btn_separar.setMinimumWidth(90 if compacto else 120)
         self.btn_nueva.setMinimumWidth(90 if compacto else 130)
@@ -684,8 +696,9 @@ class POSView(QWidget):
         self.tabla.setRowCount(len(self.carrito))
         for fila, it in enumerate(self.carrito):
             ref = f"{it['codigo']} · "
-            lbl = QLabel(f"<div style='font-weight:700'>{it['nombre']}</div>"
-                         f"<div style='color:{T['muted']};font-size:12px'>{ref}{cfg.cop(it['precio'])} c/u</div>")
+            fn, fr = (13, 11) if self._compacto else (14, 12)
+            lbl = QLabel(f"<div style='font-weight:700;font-size:{fn}px'>{it['nombre']}</div>"
+                         f"<div style='color:{T['muted']};font-size:{fr}px'>{ref}{cfg.cop(it['precio'])} c/u</div>")
             lbl.setContentsMargins(8, 0, 4, 0)
             lbl.setWordWrap(True)
             self.tabla.setCellWidget(fila, 0, lbl)
@@ -712,7 +725,7 @@ class POSView(QWidget):
             val = QLabel(cfg.cop(it["precio"] * it["cantidad"]))
             val.setAlignment(AlignRight)
             val.setContentsMargins(4, 0, 8, 0)
-            val.setStyleSheet("font-weight:800;font-size:15px;")
+            val.setStyleSheet(f"font-weight:800;font-size:{14 if self._compacto else 15}px;")
             self.tabla.setCellWidget(fila, 2, val)
 
             x = boton("Quitar", **{"del": True})

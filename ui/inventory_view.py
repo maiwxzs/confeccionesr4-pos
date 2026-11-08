@@ -16,7 +16,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyMod
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QCompleter, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
-                               QLabel, QLineEdit, QRadioButton, QSpinBox, QStyledItemDelegate, QTableView,
+                               QLabel, QLineEdit, QRadioButton, QSizePolicy, QSpinBox, QStyledItemDelegate, QTableView,
                                QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget)
 
 import barcode_engine as be
@@ -27,8 +27,8 @@ from database import POSError
 from ui import theme
 from ui.animations import DialogoAnimado
 from ui.seguridad import autorizar
-from ui.widgets import (AlignCenter, AlignRight, Contexto, MoneyEdit, boton, confirmar, en_segundo_plano,
-                        error, etiqueta, exportar_y_ofrecer_abrir, info, pil_a_pixmap, tarjeta)
+from ui.widgets import (AlignCenter, AlignRight, Contexto, FlujoLayout, MoneyEdit, boton, confirmar,
+                        en_segundo_plano, error, etiqueta, exportar_y_ofrecer_abrir, info, pil_a_pixmap, tarjeta)
 
 UserRole = Qt.ItemDataRole.UserRole
 EditRole = Qt.ItemDataRole.EditRole
@@ -625,15 +625,13 @@ class InventarioView(QWidget):
         self.buscar.setClearButtonEnabled(True)
         barra.addWidget(self.buscar, 1)
         self.cat = QComboBox()
-        self.cat.setMinimumWidth(170)
+        self.cat.setMinimumWidth(140)
         self.cat.setMinimumHeight(48)
         barra.addWidget(self.cat)
         self.chk_crit = QCheckBox("Solo stock crítico")
         barra.addWidget(self.chk_crit)
         raiz.addLayout(barra)
 
-        acciones = QHBoxLayout()
-        acciones.setSpacing(8)
         self.b_nuevo = boton("Nuevo producto", "primary")
         self.b_import = boton("Importar Excel")
         self.b_export = boton("Inventario valorizado")
@@ -647,25 +645,20 @@ class InventarioView(QWidget):
         self.b_deshacer = boton("Deshacer última importación", "ghost")
         self.b_reactivar = boton("Reactivar", "ghost")
         self.chk_inactivos = QCheckBox("Ver desactivados")
-        for b in (self.b_nuevo, self.b_import, self.b_export, self.b_formato, self.b_plant):
-            acciones.addWidget(b)
-        acciones.addStretch()
-        acciones.addWidget(self.b_etq)
-        acciones.addWidget(self.b_desact)
-        acciones.addWidget(self.b_eliminar)
-        raiz.addLayout(acciones)
-        acciones = QHBoxLayout()
         self.b_conteo = boton("Conteo físico (escáner)", "primary")
         self.b_conteo.setToolTip("Contar la ropa con el lector y ajustar diferencias (queda registrado)")
         self.b_reportes = boton("Reportes de gestión")
         self.b_reportes.setToolTip("Mercancía quieta, ventas por talla/color/categoría, comparativo, sugerido de compra")
-        acciones.addWidget(self.b_conteo)
-        acciones.addWidget(self.b_reportes)
-        acciones.addWidget(self.b_deshacer)
-        acciones.addStretch()
-        acciones.addWidget(self.chk_inactivos)
-        acciones.addWidget(self.b_reactivar)
-        raiz.addLayout(acciones)
+        # Los botones saltan a otra línea si no caben (pantallas de 1366 px)
+        cont = QWidget()
+        cont.setObjectName("transparente")
+        flujo = FlujoLayout(cont, 8)
+        for w in (self.b_nuevo, self.b_import, self.b_etq, self.b_conteo, self.b_reportes, self.b_export,
+                  self.b_formato, self.b_plant, self.b_deshacer, self.b_desact, self.b_eliminar,
+                  self.chk_inactivos, self.b_reactivar):
+            flujo.addWidget(w)
+        cont.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        raiz.addWidget(cont)
 
         self.modelo = InventarioModel(ctx, lambda m: error(self, m), lambda m: confirmar(self, m))
         self.proxy = FiltroProxy()
