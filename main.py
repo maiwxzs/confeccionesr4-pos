@@ -299,6 +299,16 @@ class VentanaPrincipal(QMainWindow):
 
     # ---------------------------------------------------------------- automatizaciones
     def _automatizaciones_inicio(self) -> None:
+        from ui.asistente import AsistenteInicial, necesita_asistente
+        if necesita_asistente(self.ctx.db):
+            # Programa recién instalado o entregado: el nuevo dueño configura su negocio
+            dlg = AsistenteInicial(self.ctx, self)
+            if dlg.exec():
+                self._estado_caja()
+                if dlg.importar_al_final:
+                    self.ir_a(3)
+                    self.vistas["inventario"].importar()
+            return
         self._autodetectar_impresora()
         self._respaldo_diario()
         if not self.ctx.db.q1("SELECT 1 FROM productos LIMIT 1"):

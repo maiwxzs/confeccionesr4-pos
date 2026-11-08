@@ -149,7 +149,7 @@ DEFAULT_CONFIG: dict[str, str] = {
     "usb_product_id": "0x5743",
     "ancho_papel_mm": "80",            # 80 | 58
     "codepage": "cp850",               # cp850 (ESC t 2) recomendado para Jaltech
-    "abrir_cajon_efectivo": "1",
+    "abrir_cajon_efectivo": "0",       # 1 solo si hay cajón monedero conectado a la impresora (RJ11)
     "imprimir_codigo_barras_tiquete": "1",
     "etiqueta_ancho_mm": "50",
     "etiqueta_alto_mm": "30",
@@ -176,7 +176,10 @@ RESOLUCION_PRUEBA_DIAN = {"resolucion_dian": "18760000001", "prefijo": "SETP",
 
 
 def es_resolucion_de_prueba(conf: dict) -> bool:
-    return (str(conf.get("resolucion_dian", "")).strip() == RESOLUCION_PRUEBA_DIAN["resolucion_dian"]
+    """True si NO hay una resolución DIAN real: la pública de pruebas (SETP) o ninguna.
+    En ese caso el tiquete se imprime como «Comprobante interno de venta»."""
+    resol = str(conf.get("resolucion_dian", "")).strip()
+    return (not resol or resol == RESOLUCION_PRUEBA_DIAN["resolucion_dian"]
             or str(conf.get("prefijo", "")).strip().upper() == RESOLUCION_PRUEBA_DIAN["prefijo"])
 METODOS_PAGO = ["Efectivo", "Nequi", "Daviplata", "Datáfono"]
 
