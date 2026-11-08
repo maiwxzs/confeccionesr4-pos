@@ -13,7 +13,7 @@ import excel_engine as xe
 from ui.animations import DialogoAnimado
 from ui.seguridad import autorizar
 from ui.widgets import (Contexto, abrir_archivo, boton, confirmar, en_segundo_plano, error, etiqueta,
-                        exportar_y_ofrecer_abrir, info)
+                        desplazable, exportar_y_ofrecer_abrir, info)
 
 
 def _form() -> tuple[QWidget, QFormLayout]:
@@ -37,13 +37,13 @@ class ConfiguracionDialog(DialogoAnimado):
         lay = QVBoxLayout(self)
         lay.addWidget(etiqueta("Configuración del sistema", titulo=True))
         tabs = QTabWidget()
-        tabs.addTab(self._tab_empresa(), "Empresa y DIAN")
-        tabs.addTab(self._tab_impresion(), "Impresora de tiquetes")
-        tabs.addTab(self._tab_etiquetas(), "Etiquetas")
-        tabs.addTab(self._tab_operacion(), "Operación")
-        tabs.addTab(self._tab_seguridad(), "Seguridad")
-        tabs.addTab(self._tab_datos(), "Datos y respaldos")
-        tabs.addTab(self._tab_actualizaciones(), "Actualizaciones")
+        tabs.addTab(desplazable(self._tab_empresa()), "Empresa y DIAN")
+        tabs.addTab(desplazable(self._tab_impresion()), "Impresora de tiquetes")
+        tabs.addTab(desplazable(self._tab_etiquetas()), "Etiquetas")
+        tabs.addTab(desplazable(self._tab_operacion()), "Operación")
+        tabs.addTab(desplazable(self._tab_seguridad()), "Seguridad")
+        tabs.addTab(desplazable(self._tab_datos()), "Datos y respaldos")
+        tabs.addTab(desplazable(self._tab_actualizaciones()), "Actualizaciones")
         lay.addWidget(tabs, 1)
         fila = QHBoxLayout()
         c = boton("Cancelar", "ghost", "lg")

@@ -304,6 +304,7 @@ class HistorialView(QWidget):
         self.eventos.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.eventos.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.eventos.setWordWrap(True)
+        self.eventos.setMinimumHeight(90)
         self.eventos.setMaximumHeight(170)
         dl.addWidget(self.eventos)
         botones = QHBoxLayout()

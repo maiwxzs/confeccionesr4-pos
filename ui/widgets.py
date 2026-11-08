@@ -12,7 +12,7 @@ from PySide6.QtCore import (QEasingCurve, QObject, QPropertyAnimation, QRunnable
                             QTimer, Signal, Slot)
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QLabel, QLineEdit,
-                               QMessageBox, QPushButton, QSizePolicy, QVBoxLayout, QWidget)
+                               QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 import config as cfg
 
@@ -370,3 +370,26 @@ def exportar_y_ofrecer_abrir(parent: QWidget, ctx: "Contexto", nombre: str, fn: 
         error(parent, f"No se pudo generar el reporte:\n{msg}\n\n¿El archivo está abierto en Excel?")
 
     en_segundo_plano(lambda: fn(ruta), ok, mal)
+
+
+class Desplazable(QScrollArea):
+    """Envuelve una pantalla para que, en monitores pequeños (1366×768, zoom 125 %), aparezca una
+    barra para bajar en lugar de amontonar tarjetas, tablas y totales unos encima de otros.
+    `alto_minimo`: altura por debajo de la cual el contenido deja de encogerse y se desplaza."""
+
+    def __init__(self, contenido: QWidget, alto_minimo: int = 0, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("desplazable")
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        if alto_minimo:
+            contenido.setMinimumHeight(alto_minimo)
+        self.setWidget(contenido)
+        self.verticalScrollBar().setSingleStep(30)
+        self.contenido = contenido
+
+
+def desplazable(contenido: QWidget, alto_minimo: int = 0) -> "Desplazable":
+    return Desplazable(contenido, alto_minimo)

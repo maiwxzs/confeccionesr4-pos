@@ -38,7 +38,7 @@ import config as cfg  # noqa: E402
 from database import Database  # noqa: E402
 from ui import theme  # noqa: E402
 from ui.animations import FadeStack, IndicadorLateral  # noqa: E402
-from ui.widgets import Bus, Contexto, Toast, boton, confirmar, en_segundo_plano, refrescar_estilo  # noqa: E402
+from ui.widgets import Bus, Contexto, Toast, boton, confirmar, en_segundo_plano, desplazable, refrescar_estilo  # noqa: E402
 
 log = logging.getLogger("r4")
 
@@ -98,6 +98,9 @@ def cerrar_splash() -> None:
 # Ventana principal
 # =========================================================================== #
 class VentanaPrincipal(QMainWindow):
+    # Altura (px) por debajo de la cual cada pantalla deja de encogerse y aparece la barra para bajar
+    ALTO_MINIMO = {"dashboard": 760, "historial": 720, "inventario": 560, "caja": 820}
+
     MODULOS = [
         ("Dashboard", "dashboard"),
         ("Vender", "pos"),
@@ -110,9 +113,10 @@ class VentanaPrincipal(QMainWindow):
         super().__init__()
         self.ctx = ctx
         self.vistas: dict[str, QWidget] = {}
+        self._paginas: dict[str, QWidget] = {}
         self.setWindowTitle(f"{cfg.APP_NAME} — {ctx.db.get_config('razon_social')}")
         self.setWindowIcon(icono_app())
-        self.setMinimumSize(1180, 700)
+        self.setMinimumSize(1000, 600)
 
         raiz = QWidget()
         raiz.setObjectName("root")
@@ -246,9 +250,13 @@ class VentanaPrincipal(QMainWindow):
             finally:
                 QApplication.restoreOverrideCursor()
             self.vistas[clave] = vista
-            self.stack.addWidget(vista)
+            # Vender ya se adapta solo (modo compacto); el resto se desplaza en pantallas bajas
+            alto = self.ALTO_MINIMO.get(clave)
+            pagina = vista if alto is None else desplazable(vista, alto)
+            self._paginas[clave] = pagina
+            self.stack.addWidget(pagina)
         vista = self.vistas[clave]
-        self.stack.mostrar(vista)
+        self.stack.mostrar(self._paginas[clave])
         boton_nav = self.grupo_nav.button(i)
         boton_nav.setChecked(True)
         self.indicador.ir_a(boton_nav, animar=self.isVisible())

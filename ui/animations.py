@@ -164,6 +164,20 @@ def destello(w: QWidget, color: str = "#22C55E", ms: int = 650, radio: int = 10)
 # --------------------------------------------------------------------------- #
 # Diálogos
 # --------------------------------------------------------------------------- #
+def ajustar_a_pantalla(w: QWidget, margen: int = 24) -> None:
+    """Si una ventana es más grande que la pantalla (portátiles 1366×768), la achica y la centra
+    para que la barra de título y los botones Guardar/Cancelar siempre queden visibles."""
+    pantalla = w.screen() if hasattr(w, "screen") else None
+    if pantalla is None:
+        return
+    zona = pantalla.availableGeometry()
+    ancho = min(w.width(), zona.width() - margen)
+    alto = min(w.height(), zona.height() - margen)
+    if (ancho, alto) != (w.width(), w.height()):
+        w.resize(ancho, alto)
+        w.move(zona.x() + (zona.width() - ancho) // 2, zona.y() + (zona.height() - alto) // 2)
+
+
 class DialogoAnimado(QDialog):
     """QDialog que aparece con fundido + leve crecimiento y se cierra con fundido."""
 
@@ -172,6 +186,7 @@ class DialogoAnimado(QDialog):
         if self.property("_animado"):
             return
         self.setProperty("_animado", True)
+        ajustar_a_pantalla(self)
         self.setWindowOpacity(0.0)
         fin = self.geometry()
         ini = QRect(fin.x() + fin.width() // 40, fin.y() + fin.height() // 40,

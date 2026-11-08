@@ -99,7 +99,8 @@ class ArqueoDialog(DialogoAnimado):
         self.ctx = ctx
         self.cierre: dict | None = None
         self.setWindowTitle("Arqueo ciego y cierre de caja")
-        self.setMinimumSize(700, 720)
+        self.setMinimumSize(640, 480)
+        self.resize(700, 720)
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
         lay.addWidget(etiqueta("Arqueo ciego", titulo=True))

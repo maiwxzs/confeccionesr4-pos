@@ -58,7 +58,7 @@ class AsistenteInicial(DialogoAnimado):
         self.importar_al_final = False
         c = ctx.conf
         self.setWindowTitle("Configuración inicial — ConfeccionesR4 POS")
-        self.setMinimumSize(720, 600)
+        self.setMinimumSize(680, 540)
         raiz = QVBoxLayout(self)
         raiz.setSpacing(12)
         self.lbl_paso = etiqueta("", kpiTitulo=True)
