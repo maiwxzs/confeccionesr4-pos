@@ -325,12 +325,20 @@ class VentanaPrincipal(QMainWindow):
     def _autodetectar_impresora(self) -> None:
         """Si no hay impresora elegida, toma la térmica instalada (Jaltech / POS-80 / 58 mm…)."""
         db = self.ctx.db
+        import printer_engine as pe
+        instaladas = pe.listar_impresoras()
+        # Impresora de etiquetas (SAT TT460…): se elige sola si hay exactamente una
+        if not db.get_config("impresora_etiquetas"):
+            etiq = pe.detectar_impresora_etiquetas(instaladas)
+            if len(etiq) == 1:
+                db.set_config({"impresora_etiquetas": etiq[0], "modo_etiquetas": "windows"})
+                self.ctx.notificar(f"Impresora de etiquetas configurada: {etiq[0]}", "ok")
         if db.get_config("impresora_tiquetes") or db.get_config("transporte_impresion") != "win32":
             return
-        import printer_engine as pe
         claves = ("jaltech", "pos", "80", "58", "thermal", "termica", "térmica", "receipt", "xp-", "tm-t")
-        termicas = [p for p in pe.listar_impresoras()
-                    if any(k in p.lower() for k in claves) and "pdf" not in p.lower() and "xps" not in p.lower()]
+        termicas = [p for p in instaladas
+                    if any(k in p.lower() for k in claves) and "pdf" not in p.lower() and "xps" not in p.lower()
+                    and not pe.es_impresora_etiquetas(p)]
         if len(termicas) == 1:
             ancho = "58" if "58" in termicas[0] else "80"
             db.set_config({"impresora_tiquetes": termicas[0], "ancho_papel_mm": ancho})

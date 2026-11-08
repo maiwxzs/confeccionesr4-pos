@@ -586,6 +586,11 @@ class EtiquetasDialog(DialogoAnimado):
             return
         conf = dict(self.ctx.conf)
         conf.update({"etiqueta_ancho_mm": str(self.ancho.value()), "etiqueta_alto_mm": str(self.alto.value())})
+        if conf.get("modo_etiquetas", "windows") != "escpos" and not conf.get("impresora_etiquetas"):
+            from ui.widgets import error
+            error(self, "Aún no se ha elegido la impresora de ETIQUETAS (SAT TT460).\n\n"
+                        "Vaya a Ajustes › Etiquetas, pulse «Detectar» y luego «Imprimir etiqueta de prueba».")
+            return
         self.ctx.db.set_config({"etiqueta_ancho_mm": self.ancho.value(), "etiqueta_alto_mm": self.alto.value(),
                                 "etiqueta_simbologia": self.simb.currentData(),
                                 "etiqueta_mostrar_tienda": "1" if self.chk_tienda.isChecked() else "0",

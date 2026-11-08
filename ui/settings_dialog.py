@@ -205,7 +205,7 @@ class ConfiguracionDialog(DialogoAnimado):
         f.addRow("USB Vendor ID", self._linea("usb_vendor_id"))
         f.addRow("USB Product ID", self._linea("usb_product_id"))
         fila = QHBoxLayout()
-        prueba = boton("Imprimir página de prueba", "primary")
+        prueba = boton("Imprimir tiquete de prueba", "primary")
         prueba.clicked.connect(self._prueba)
         cajon = boton("Probar cajón")
         cajon.clicked.connect(self._cajon)
@@ -229,8 +229,15 @@ class ConfiguracionDialog(DialogoAnimado):
             ("ESC/POS raster en la impresora térmica de tiquetes", "escpos"),
             ("TSPL (impresoras de etiquetas TSC / Xprinter)", "tspl")]))
         impresoras = pe.listar_impresoras()
-        opciones = [("(La misma de tiquetes)", "")] + [(p, p) for p in impresoras]
-        f.addRow("Impresora de etiquetas", self._combo("impresora_etiquetas", opciones, editable=True))
+        opciones = [("(Sin elegir: saldría por la de tiquetes)", "")] + [(p, p) for p in impresoras]
+        self.cb_etiquetas = self._combo("impresora_etiquetas", opciones, editable=True)
+        fila_imp = QHBoxLayout()
+        fila_imp.addWidget(self.cb_etiquetas, 1)
+        b_det = boton("Detectar")
+        b_det.setToolTip("Busca la impresora de etiquetas instalada (SAT TT460, TSC, Zebra…)")
+        b_det.clicked.connect(self._detectar_etiquetas)
+        fila_imp.addWidget(b_det)
+        f.addRow("Impresora de etiquetas", fila_imp)
         f.addRow("Ancho etiqueta", self._spin("etiqueta_ancho_mm", 25, 104, " mm"))
         f.addRow("Alto etiqueta", self._spin("etiqueta_alto_mm", 15, 100, " mm"))
         f.addRow("Simbología", self._combo("etiqueta_simbologia", [
@@ -241,6 +248,18 @@ class ConfiguracionDialog(DialogoAnimado):
             ("Cursiva (elegante)", "cursiva"), ("Normal (letra de imprenta)", "normal")]))
         import barcode_engine as be
         f.addRow("Tipo de cursiva", self._combo("etiqueta_fuente", [(n, n) for n in be.FUENTES_CURSIVAS]))
+        fila_p = QHBoxLayout()
+        b_prueba_et = boton("Imprimir etiqueta de prueba", "primary")
+        b_prueba_et.clicked.connect(self._prueba_etiqueta)
+        fila_p.addWidget(b_prueba_et)
+        fila_p.addStretch()
+        f.addRow("", fila_p)
+        guia = etiqueta("Etiqueta de prueba: sale 1 sola, con un marco en el borde. Si el marco sale completo y "
+                        "centrado, el tamaño está bien. Si se corta o sale corrido, ajuste el ancho/alto aquí y en "
+                        "Windows › Impresoras › SAT TT460 › Preferencias de impresión (mismo tamaño), y calibre "
+                        "la impresora con el botón FEED.", muted=True)
+        guia.setWordWrap(True)
+        f.addRow("", guia)
         nota = etiqueta("La cursiva solo se aplica al nombre de la tienda. Las barras y el código impreso "
                         "debajo no cambian, para que el lector los siga leyendo sin errores. "
                         "Vea el resultado en Inventario › Etiquetas antes de imprimir el lote.", muted=True)
@@ -482,6 +501,40 @@ class ConfiguracionDialog(DialogoAnimado):
             error(self, f"No se pudo generar la vista previa:\n{e}")
             return
         abrir_archivo(str(ruta))
+
+    def _detectar_etiquetas(self) -> None:
+        encontradas = pe.detectar_impresora_etiquetas()
+        if not encontradas:
+            error(self, "No encontré ninguna impresora de etiquetas instalada.\n\n"
+                        "Instale el driver de la SAT TT460 (Seagull) y verifique que aparezca en "
+                        "Configuración › Bluetooth y dispositivos › Impresoras de Windows.")
+            return
+        nombre = encontradas[0]
+        i = self.cb_etiquetas.findData(nombre)
+        if i >= 0:
+            self.cb_etiquetas.setCurrentIndex(i)
+        else:
+            self.cb_etiquetas.setEditText(nombre)
+        if self.campos["modo_etiquetas"].currentData() != "windows":
+            self.campos["modo_etiquetas"].setCurrentIndex(self.campos["modo_etiquetas"].findData("windows"))
+        self.ctx.notificar(f"Impresora de etiquetas: {nombre}", "ok")
+
+    def _prueba_etiqueta(self) -> None:
+        conf = self._conf_temporal()
+        modo = conf.get("modo_etiquetas", "windows")
+        destino = conf.get("impresora_etiquetas", "")
+        if modo != "escpos" and (not destino or destino == conf.get("impresora_tiquetes")):
+            error(self, "Primero elija la impresora de ETIQUETAS (la SAT TT460) en la lista o use «Detectar».\n\n"
+                        "Si no, la etiqueta saldría por la impresora de tiquetes.")
+            return
+        try:
+            img = pe.etiqueta_de_prueba(conf)
+        except Exception as e:  # noqa: BLE001
+            error(self, f"No se pudo generar la etiqueta de prueba:\n{e}")
+            return
+        en_segundo_plano(lambda: pe.imprimir_etiquetas(img, 1, conf),
+                         lambda _: self.ctx.notificar(f"Etiqueta de prueba enviada a {destino or 'la impresora'}", "ok"),
+                         lambda m: error(self, m, "Error imprimiendo la etiqueta"))
 
     def _cajon(self) -> None:
         conf = self._conf_temporal()

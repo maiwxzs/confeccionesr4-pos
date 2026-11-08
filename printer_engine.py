@@ -637,6 +637,39 @@ def _imprimir_gdi(img, impresora: str, ancho_mm: float, alto_mm: float, copias: 
         dc.DeleteDC()
 
 
+# Nombres con los que Windows suele instalar impresoras de ETIQUETAS (SAT TT460 con driver Seagull, TSC…)
+CLAVES_ETIQUETAS = ("tt460", "sat tt", "sat xt", "tsc", "ttp-", "te200", "te210", "zdesigner", "zebra", "godex",
+                    "argox", "honeywell", "label", "etiqueta", "4barcode", "barcode")
+
+
+def es_impresora_etiquetas(nombre: str) -> bool:
+    n = (nombre or "").lower()
+    return any(k in n for k in CLAVES_ETIQUETAS)
+
+
+def detectar_impresora_etiquetas(lista: list[str] | None = None) -> list[str]:
+    lista = listar_impresoras() if lista is None else lista
+    return [p for p in lista if es_impresora_etiquetas(p)]
+
+
+def etiqueta_de_prueba(conf: dict[str, str]):
+    """Etiqueta del tamaño configurado con un marco en el borde: si el marco sale completo y centrado,
+    el tamaño está bien; si se corta, hay que ajustar el tamaño aquí y en el driver de Windows."""
+    import barcode_engine as be
+    from PIL import ImageDraw
+    ancho = float(conf.get("etiqueta_ancho_mm", 50) or 50)
+    alto = float(conf.get("etiqueta_alto_mm", 30) or 30)
+    producto = {"codigo": "R4PRUEBA", "nombre": "PRUEBA", "categoria": f"{ancho:g}x{alto:g} mm",
+                "talla": "", "precio": 12345, "codigo_barras": ""}
+    img = be.generar_etiqueta(producto, ancho, alto, "code128", conf.get("razon_social", "CONFECCIONESR4"),
+                              conf.get("etiqueta_mostrar_tienda", "1") == "1",
+                              conf.get("etiqueta_estilo", "cursiva"), conf.get("etiqueta_fuente", "Dancing Script"))
+    img = img.convert("L")
+    d = ImageDraw.Draw(img)
+    d.rectangle([2, 2, img.width - 3, img.height - 3], outline=0, width=2)
+    return img
+
+
 def imprimir_etiquetas(img, copias: int, conf: dict[str, str]) -> None:
     modo = conf.get("modo_etiquetas", "windows")
     impresora = conf.get("impresora_etiquetas") or conf.get("impresora_tiquetes", "")
