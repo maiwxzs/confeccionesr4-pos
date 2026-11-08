@@ -11,8 +11,9 @@
 ; =============================================================================
 
 #define MyAppName      "ConfeccionesR4 POS"
+; GitHub Actions pasa la version con /DMyAppVersion=1.0.<n>
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.0"   ; GitHub Actions lo pasa con /DMyAppVersion=1.0.<n>
+  #define MyAppVersion "1.0.0"
 #endif
 #define MyAppPublisher "CONFECCIONESR4"
 #define MyAppExeName   "ConfeccionesR4.exe"

@@ -381,6 +381,11 @@ class VentanaPrincipal(QMainWindow):
 
     def closeEvent(self, e) -> None:  # noqa: N802
         actualizando = bool(QApplication.instance().property("actualizando"))
+        if not actualizando and self._vendiendo() and not confirmar(
+                self, "Hay una venta EN CURSO sin cobrar.\n\n¿Cerrar el programa de todos modos? "
+                      "(la venta se pierde)", "Salir"):
+            e.ignore()
+            return
         if not actualizando and self.ctx.db.caja_abierta() and not confirmar(
                 self, "La caja sigue ABIERTA.\n\nPuede cerrar el programa y continuar el turno después, "
                       "pero recuerde hacer el arqueo al final del día.\n\n¿Salir de todos modos?", "Salir"):
@@ -416,7 +421,7 @@ def main() -> int:
 
     candado = QLockFile(str(cfg.data_dir() / "confeccionesr4.lock"))
     candado.setStaleLockTime(0)
-    if not candado.tryLock(200):
+    if not candado.tryLock(5000):   # espera a la instancia anterior si se está reiniciando
         cerrar_splash()
         QMessageBox.information(None, cfg.APP_NAME, "ConfeccionesR4 POS ya está abierto.")
         return 0

@@ -762,6 +762,8 @@ def exportar_cierre_individual(db, cierre: dict[str, Any], ruta: str | Path) -> 
         {"c": "TOTAL VENTAS", "v": cierre["total_ventas"], "_t": "moneda"},
         {"c": "Devoluciones (total)", "v": cierre["total_devoluciones"], "_t": "moneda"},
         {"c": "Devoluciones en efectivo", "v": cierre["devoluciones_efectivo"], "_t": "moneda"},
+        {"c": "Entradas de efectivo", "v": cierre.get("total_entradas", 0), "_t": "moneda"},
+        {"c": "Salidas de efectivo (gastos / retiros)", "v": cierre.get("total_salidas", 0), "_t": "moneda"},
         {"c": "Efectivo esperado en cajón", "v": cierre["efectivo_esperado"], "_t": "moneda"},
         {"c": "Efectivo contado (arqueo ciego)", "v": cierre["efectivo_contado"], "_t": "moneda"},
         {"c": "Diferencia", "v": cierre["diferencia"], "_t": "moneda"},
@@ -769,9 +771,20 @@ def exportar_cierre_individual(db, cierre: dict[str, Any], ruta: str | Path) -> 
         {"c": "Utilidad del turno", "v": cierre["utilidad"], "_t": "moneda"},
         {"c": "Observaciones", "v": cierre.get("observaciones", ""), "_t": "texto"},
     ]
+    for m, d in (cierre.get("conciliacion") or {}).items():
+        filas += [{"c": f"{m}: según sistema", "v": d["sistema"], "_t": "moneda"},
+                  {"c": f"{m}: según datáfono / app", "v": d["declarado"], "_t": "moneda"},
+                  {"c": f"{m}: diferencia", "v": d["diferencia"], "_t": "moneda"}]
     rep.agregar_hoja("Cierre", f"Cierre de Caja N.º {cierre['id']}",
                      [Columna("Concepto", "c"), Columna("Valor", "v", "moneda")], filas,
                      totales=False, formato_fila=lambda f: {"v": f["_t"]})
+    movs = cierre.get("movimientos") or []
+    if movs:
+        rep.agregar_hoja("Movimientos", "Entradas y Salidas de Efectivo",
+                         [Columna("Fecha", "fecha", "fecha"), Columna("Tipo", "tipo"), Columna("Concepto", "concepto"),
+                          Columna("Valor", "monto", "moneda", True), Columna("Cajero", "cajero"),
+                          Columna("Anulado", "anulado_txt"), Columna("Motivo anulación", "anulado_motivo")],
+                         [dict(m, anulado_txt="SÍ" if m["anulado"] else "") for m in movs])
     return rep.guardar(ruta)
 
 

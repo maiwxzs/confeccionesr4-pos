@@ -136,6 +136,37 @@ Inventario › **Importar Excel** reconoce el formato de la tienda:
 Si el libro tiene varias hojas usa "INVENTARIO GENERAL" y permite cambiarla en la vista previa.
 **Exportar en formato original** devuelve las mismas 14 columnas con el stock actualizado.
 
+## 6b. Corregir errores (nada se borra a escondidas: todo queda en la auditoría)
+
+| Me equivoqué en… | Solución | Dónde |
+|---|---|---|
+| Cobré en efectivo pero pagó con débito/Nequi | **Corregir método de pago** (mientras la caja siga abierta) | Documentos › tiquete |
+| Una venta completa | **Procesar devolución / Anular** (clave) | Documentos › tiquete |
+| Algunas prendas de una venta | Devolución parcial (cantidades + motivo) | Documentos › tiquete |
+| La base inicial | **Corregir base inicial** (clave) | Caja |
+| Abrí la caja sin querer | **Anular apertura** (solo si no tiene ventas) | Caja |
+| Cerré la caja antes de tiempo | **Reabrir último cierre** (clave) | Caja |
+| Saqué/puse dinero del cajón | **Salida / gasto** o **Entrada de efectivo** | Caja |
+| Registré mal un gasto | **Anular movimiento** (clave) y registrarlo bien | Caja |
+| Creé un producto por error | **Eliminar** (si ya se vendió, se desactiva) | Inventario |
+| Importé el Excel equivocado | **Deshacer última importación** | Inventario |
+| Desactivé un producto | Ver desactivados › **Reactivar** | Inventario |
+| Quiero empezar de cero | **Borrar datos / dejar en blanco** (con respaldo previo) | Ajustes › Datos |
+| Quiero volver a como estaba ayer | **Restaurar un respaldo** | Ajustes › Datos |
+
+**Dinero del datáfono (débito/crédito), Nequi y Daviplata:** no entra al cajón; va directo al
+banco o a la app. Por eso el arqueo solo cuenta efectivo. Al cerrar, escriba el total del
+*cierre del datáfono* y lo recibido en Nequi/Daviplata: el sistema lo compara con las ventas
+y muestra las diferencias en el reporte de cierre.
+
+**Validaciones automáticas:** no vende prendas sin precio ni sin stock; alerta si el monto recibido
+parece mal digitado; pide clave para descuentos mayores al 30 %; avisa si el precio queda por
+debajo del costo o cambia demasiado; no deja stock negativo; pide recontar una vez si el arqueo
+no cuadra (sin revelar la cifra) y exige observación si persiste la diferencia; avisa al cerrar
+el programa con una venta en curso.
+
+**Clave de administrador:** créela en *Ajustes › Seguridad*.
+
 ## 7. Facturación y DIAN (léalo)
 
 - El programa imprime un **comprobante de venta numerado**, 100 % offline. **No genera factura

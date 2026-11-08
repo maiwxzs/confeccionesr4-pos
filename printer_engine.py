@@ -364,12 +364,34 @@ def construir_cierre(cierre: dict[str, Any], conf: dict[str, str]) -> EscPos:
     p.dos_columnas("Base inicial", cfg.cop(cierre["base_inicial"]))
     p.dos_columnas("+ Ventas efectivo", cfg.cop(cierre["total_efectivo"]))
     p.dos_columnas("- Devol. efectivo", cfg.cop(cierre["devoluciones_efectivo"]))
+    if cierre.get("total_entradas"):
+        p.dos_columnas("+ Entradas de efectivo", cfg.cop(cierre["total_entradas"]))
+    if cierre.get("total_salidas"):
+        p.dos_columnas("- Salidas (gastos/retiros)", cfg.cop(cierre["total_salidas"]))
     p.dos_columnas("= Esperado en cajón", cfg.cop(cierre["efectivo_esperado"]))
     p.dos_columnas("Contado (ciego)", cfg.cop(cierre["efectivo_contado"]))
     p.negrita(True).dos_columnas("DIFERENCIA", cfg.cop(cierre["diferencia"])).negrita(False)
     p.separador("=")
     p.alinear("centro").negrita(True).tamano(2, 2).texto(cierre["resultado"]).tamano(1, 1).negrita(False)
     p.alinear("izq").separador("=")
+    movs = [m for m in cierre.get("movimientos", []) if not m.get("anulado")]
+    if movs:
+        p.negrita(True).texto("MOVIMIENTOS DE EFECTIVO").negrita(False)
+        for m in movs:
+            signo = "+" if m["tipo"] == "ENTRADA" else "-"
+            p.dos_columnas(f"{signo} {m['concepto']}", cfg.cop(m["monto"]))
+        p.separador()
+    conc = cierre.get("conciliacion") or {}
+    if conc:
+        p.negrita(True).texto("CONCILIACIÓN PAGOS DIGITALES").negrita(False)
+        for m, d in conc.items():
+            p.texto(m)
+            p.dos_columnas("  Sistema / Reportado", f"{cfg.cop(d['sistema'])} / {cfg.cop(d['declarado'])}")
+            estado = "OK" if d["diferencia"] == 0 else cfg.cop(d["diferencia"])
+            p.dos_columnas("  Diferencia", estado)
+        p.separador()
+    if cierre.get("reaperturas"):
+        p.texto(f"Caja reabierta {cierre['reaperturas']} vez/veces (ver auditoría)")
     if cierre.get("observaciones"):
         p.envolver(f"Obs: {cierre['observaciones']}")
     p.avanzar(2).texto("Firma cajero: ____________________")

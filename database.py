@@ -29,7 +29,7 @@ from typing import Any, Iterable, Iterator
 
 import config as cfg
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS configuracion (
@@ -80,7 +80,11 @@ CREATE TABLE IF NOT EXISTS cierres_caja (
     diferencia          INTEGER,
     resultado           TEXT,                       -- CUADRE PERFECTO / SOBRANTE / FALTANTE
     denominaciones      TEXT,                       -- JSON {"50000": 3, ...}
-    observaciones       TEXT    NOT NULL DEFAULT ''
+    observaciones       TEXT    NOT NULL DEFAULT '',
+    total_entradas      INTEGER NOT NULL DEFAULT 0,
+    total_salidas       INTEGER NOT NULL DEFAULT 0,
+    conciliacion        TEXT    NOT NULL DEFAULT '', -- JSON: datáfono / Nequi / Daviplata declarado vs sistema
+    reaperturas         INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_caja_abierta ON cierres_caja(estado) WHERE estado = 'ABIERTA';
 
@@ -175,6 +179,32 @@ CREATE TABLE IF NOT EXISTS documentos_historial (
 CREATE INDEX IF NOT EXISTS ix_hist_venta ON documentos_historial(venta_id);
 CREATE INDEX IF NOT EXISTS ix_hist_fecha ON documentos_historial(fecha);
 
+-- Entradas / salidas de efectivo del cajón (gastos, retiros, cambio de sencillo...)
+CREATE TABLE IF NOT EXISTS movimientos_caja (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    caja_id         INTEGER NOT NULL REFERENCES cierres_caja(id),
+    fecha           TEXT    NOT NULL,
+    tipo            TEXT    NOT NULL CHECK (tipo IN ('ENTRADA','SALIDA')),
+    concepto        TEXT    NOT NULL,
+    monto           INTEGER NOT NULL CHECK (monto > 0),
+    cajero          TEXT    NOT NULL DEFAULT '',
+    anulado         INTEGER NOT NULL DEFAULT 0,
+    anulado_motivo  TEXT    NOT NULL DEFAULT '',
+    anulado_fecha   TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_mov_caja ON movimientos_caja(caja_id);
+
+-- Importaciones de inventario (permite deshacer la última)
+CREATE TABLE IF NOT EXISTS importaciones (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    fecha       TEXT    NOT NULL,
+    modo        TEXT    NOT NULL,
+    nuevos      INTEGER NOT NULL DEFAULT 0,
+    actualizados INTEGER NOT NULL DEFAULT 0,
+    instantanea TEXT    NOT NULL,                   -- JSON: estado previo de cada producto tocado
+    deshecha    INTEGER NOT NULL DEFAULT 0
+);
+
 -- Auditoría general (solo inserción)
 CREATE TABLE IF NOT EXISTS auditoria (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,10 +222,20 @@ CREATE INDEX IF NOT EXISTS ix_auditoria_fecha ON auditoria(fecha);
 TRIGGERS_SQL = """
 CREATE TRIGGER IF NOT EXISTS tr_ventas_no_borrar BEFORE DELETE ON ventas
 BEGIN SELECT RAISE(ABORT, 'Los tiquetes no se pueden borrar: use Anular / Devolución'); END;
-CREATE TRIGGER IF NOT EXISTS tr_ventas_inmutable
+CREATE TRIGGER IF NOT EXISTS tr_ventas_inmutable_v4
 BEFORE UPDATE OF numero_tiquete, consecutivo, fecha, caja_id, subtotal, descuento, total, costo_total,
-                 utilidad, metodo_pago, monto_recibido, cambio ON ventas
+                 utilidad, monto_recibido, cambio ON ventas
 BEGIN SELECT RAISE(ABORT, 'Un tiquete emitido no se puede modificar'); END;
+-- El método de pago solo se corrige mientras la caja de esa venta siga abierta
+CREATE TRIGGER IF NOT EXISTS tr_ventas_metodo
+BEFORE UPDATE OF metodo_pago ON ventas
+WHEN (SELECT estado FROM cierres_caja WHERE id = OLD.caja_id) = 'CERRADA'
+BEGIN SELECT RAISE(ABORT, 'No se puede cambiar el método de pago de una caja ya cerrada'); END;
+CREATE TRIGGER IF NOT EXISTS tr_mov_no_borrar BEFORE DELETE ON movimientos_caja
+BEGIN SELECT RAISE(ABORT, 'Los movimientos de caja no se borran: se anulan'); END;
+CREATE TRIGGER IF NOT EXISTS tr_mov_inmutable
+BEFORE UPDATE OF caja_id, fecha, tipo, concepto, monto ON movimientos_caja
+BEGIN SELECT RAISE(ABORT, 'Un movimiento de caja no se puede modificar: anúlelo y regístrelo de nuevo'); END;
 CREATE TRIGGER IF NOT EXISTS tr_detalle_no_borrar BEFORE DELETE ON detalle_ventas
 BEGIN SELECT RAISE(ABORT, 'El detalle de un tiquete no se puede borrar'); END;
 CREATE TRIGGER IF NOT EXISTS tr_detalle_inmutable
@@ -216,11 +256,17 @@ CREATE TRIGGER IF NOT EXISTS tr_audit_no_borrar BEFORE DELETE ON auditoria
 BEGIN SELECT RAISE(ABORT, 'La auditoría es de solo lectura'); END;
 CREATE TRIGGER IF NOT EXISTS tr_audit_no_editar BEFORE UPDATE ON auditoria
 BEGIN SELECT RAISE(ABORT, 'La auditoría es de solo lectura'); END;
-CREATE TRIGGER IF NOT EXISTS tr_cierre_no_reabrir BEFORE UPDATE ON cierres_caja
-WHEN OLD.estado = 'CERRADA'
+-- Un cierre solo admite REABRIRSE (con clave y auditoría), nunca editarse
+CREATE TRIGGER IF NOT EXISTS tr_cierre_cerrado BEFORE UPDATE ON cierres_caja
+WHEN OLD.estado = 'CERRADA' AND NEW.estado <> 'ABIERTA'
 BEGIN SELECT RAISE(ABORT, 'Un cierre de caja no se puede modificar'); END;
-CREATE TRIGGER IF NOT EXISTS tr_cierre_no_borrar BEFORE DELETE ON cierres_caja
-BEGIN SELECT RAISE(ABORT, 'Los cierres de caja no se pueden borrar'); END;
+-- Solo se puede borrar una apertura hecha por error: abierta y sin ningún movimiento
+CREATE TRIGGER IF NOT EXISTS tr_cierre_borrar BEFORE DELETE ON cierres_caja
+WHEN OLD.estado = 'CERRADA'
+  OR EXISTS (SELECT 1 FROM ventas WHERE caja_id = OLD.id)
+  OR EXISTS (SELECT 1 FROM devoluciones WHERE caja_id = OLD.id)
+  OR EXISTS (SELECT 1 FROM movimientos_caja WHERE caja_id = OLD.id)
+BEGIN SELECT RAISE(ABORT, 'Esta caja tiene movimientos: no se puede borrar'); END;
 """
 
 
@@ -300,6 +346,8 @@ class Database:
             if existe:
                 self._migrar()
             self.conn.executescript(SCHEMA_SQL)
+            for viejo in ("tr_ventas_inmutable", "tr_cierre_no_reabrir", "tr_cierre_no_borrar"):
+                self.conn.execute(f"DROP TRIGGER IF EXISTS {viejo}")
             self.conn.executescript(TRIGGERS_SQL)
             self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
@@ -323,6 +371,12 @@ class Database:
                              ("datos_origen", "TEXT NOT NULL DEFAULT ''")):
                 if col not in prod:
                     c.execute(f"ALTER TABLE productos ADD COLUMN {col} {ddl}")
+            # v3 -> v4: columnas de cierre (movimientos y conciliación)
+            cier = self._columnas("cierres_caja")
+            for col, ddl in (("total_entradas", "INTEGER NOT NULL DEFAULT 0"), ("total_salidas", "INTEGER NOT NULL DEFAULT 0"),
+                             ("conciliacion", "TEXT NOT NULL DEFAULT ''"), ("reaperturas", "INTEGER NOT NULL DEFAULT 0")):
+                if col not in cier:
+                    c.execute(f"ALTER TABLE cierres_caja ADD COLUMN {col} {ddl}")
             # v2 -> v3: ventas (nuevo CHECK de estado + cliente + devuelto) se reconstruye
             for t in ("tr_ventas_no_borrar", "tr_ventas_inmutable", "tr_detalle_no_borrar", "tr_detalle_inmutable",
                       "tr_dev_no_borrar", "tr_dev_no_editar"):
@@ -612,6 +666,9 @@ class Database:
         encabezados_origen: columnas del Excel original, para exportar luego en el mismo formato.
         """
         nuevos = actualizados = 0
+        instantanea: list[dict[str, Any]] = []
+        campos_snap = ("referencia", "nombre", "categoria", "costo", "precio", "stock", "marca", "color", "talla",
+                       "stock_minimo", "datos_origen", "activo")
         with self.transaccion() as c:
             for f in filas:
                 codigo = str(f.get("codigo") or "").strip()
@@ -625,6 +682,8 @@ class Database:
                 extra = (str(f.get("marca") or ""), str(f.get("color") or ""), str(f.get("talla") or ""),
                          int(f.get("stock_minimo") or 0), json.dumps(f.get("origen") or {}, ensure_ascii=False))
                 if existente:
+                    previo = c.execute("SELECT * FROM productos WHERE id=?", (existente["id"],)).fetchone()
+                    instantanea.append({"id": previo["id"], "antes": {k: previo[k] for k in campos_snap}})
                     stock_sql = "stock = stock + ?" if modo_stock == "sumar" else "stock = ?"
                     c.execute(
                         f"UPDATE productos SET referencia=COALESCE(NULLIF(?,''), referencia), nombre=?,"
@@ -644,21 +703,68 @@ class Database:
                             if not c.execute("SELECT 1 FROM productos WHERE codigo=?", (codigo,)).fetchone():
                                 break
                             n += 1
-                    c.execute(
+                    cur = c.execute(
                         "INSERT INTO productos(codigo, referencia, nombre, categoria, costo, precio, stock,"
                         " marca, color, talla, stock_minimo, datos_origen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                         (codigo, ref, f["nombre"], f.get("categoria") or "General",
                          int(f.get("costo") or 0), int(f.get("precio") or 0), int(f.get("stock") or 0), *extra),
                     )
+                    instantanea.append({"id": cur.lastrowid, "antes": None})
                     nuevos += 1
             if encabezados_origen:
                 c.execute("INSERT INTO configuracion(clave, valor) VALUES('formato_carga_columnas', ?)"
                           " ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor",
                           (json.dumps(list(encabezados_origen), ensure_ascii=False),))
+            c.execute("INSERT INTO importaciones(fecha, modo, nuevos, actualizados, instantanea) VALUES (?,?,?,?,?)",
+                      (_ahora(), modo_stock, nuevos, actualizados, json.dumps(instantanea, ensure_ascii=False)))
             self.auditar("IMPORTACION_INVENTARIO", "productos", "",
                          {"nuevos": nuevos, "actualizados": actualizados, "modo_stock": modo_stock,
                           "unidades": sum(int(f.get("stock") or 0) for f in filas)}, c)
         return {"nuevos": nuevos, "actualizados": actualizados}
+
+    def ultima_importacion(self) -> sqlite3.Row | None:
+        return self.q1("SELECT id, fecha, modo, nuevos, actualizados, deshecha FROM importaciones"
+                       " ORDER BY id DESC LIMIT 1")
+
+    def deshacer_importacion(self) -> dict[str, int]:
+        """Revierte la ÚLTIMA importación: restaura los productos que modificó y elimina los que creó
+        (los que ya tienen ventas no se borran: se desactivan, para no romper el historial)."""
+        imp = self.q1("SELECT * FROM importaciones ORDER BY id DESC LIMIT 1")
+        if imp is None or imp["deshecha"]:
+            raise POSError("No hay ninguna importación pendiente por deshacer.")
+        restaurados = eliminados = desactivados = 0
+        with self.transaccion() as c:
+            for item in json.loads(imp["instantanea"]):
+                pid, antes = item["id"], item["antes"]
+                if antes is None:
+                    usado = c.execute("SELECT 1 FROM detalle_ventas WHERE producto_id=? LIMIT 1", (pid,)).fetchone()
+                    if usado:
+                        c.execute("UPDATE productos SET activo=0 WHERE id=?", (pid,))
+                        desactivados += 1
+                    else:
+                        c.execute("DELETE FROM productos WHERE id=?", (pid,))
+                        eliminados += 1
+                else:
+                    sets = ", ".join(f"{k}=?" for k in antes)
+                    c.execute(f"UPDATE productos SET {sets}, actualizado=datetime('now','localtime') WHERE id=?",
+                              (*antes.values(), pid))
+                    restaurados += 1
+            c.execute("UPDATE importaciones SET deshecha=1 WHERE id=?", (imp["id"],))
+            r = {"restaurados": restaurados, "eliminados": eliminados, "desactivados": desactivados}
+            self.auditar("IMPORTACION_DESHECHA", "importaciones", imp["id"], r, c)
+        return r
+
+    def eliminar_producto(self, pid: int) -> None:
+        """Borra un producto creado por error. Si ya se vendió, no se puede (se debe desactivar)."""
+        p = self.producto_por_id(pid)
+        if p is None:
+            raise POSError("El producto no existe.")
+        if self.q1("SELECT 1 FROM detalle_ventas WHERE producto_id=? LIMIT 1", (pid,)):
+            raise POSError(f"«{p['nombre']}» ya tiene ventas registradas: no se puede borrar sin dañar el "
+                           "historial. Use «Desactivar» para ocultarlo del punto de venta.")
+        with self.transaccion() as c:
+            c.execute("DELETE FROM productos WHERE id=?", (pid,))
+            self.auditar("PRODUCTO_ELIMINADO", "productos", pid, dict(p), c)
 
     def inventario_valorizado(self) -> list[sqlite3.Row]:
         return self.q(
@@ -708,9 +814,14 @@ class Database:
         dev = self.q1("SELECT COALESCE(SUM(monto),0) t, COALESCE(SUM(utilidad),0) u, COUNT(*) n,"
                       " COALESCE(SUM(CASE WHEN metodo_pago='Efectivo' THEN monto END),0) e"
                       " FROM devoluciones WHERE caja_id=?", (caja_id,))
+        mov = self.q1("SELECT COALESCE(SUM(CASE WHEN tipo='ENTRADA' THEN monto END),0) e,"
+                      " COALESCE(SUM(CASE WHEN tipo='SALIDA' THEN monto END),0) s"
+                      " FROM movimientos_caja WHERE caja_id=? AND anulado=0", (caja_id,))
         return {
             "caja": dict(caja),
             "por_metodo": por_metodo,
+            "entradas": mov["e"],
+            "salidas": mov["s"],
             "num_ventas": tot["n"],
             "total_ventas": tot["t"],
             "ventas_netas": tot["t"] - dev["t"],
@@ -718,16 +829,29 @@ class Database:
             "total_devoluciones": dev["t"],
             "num_devoluciones": dev["n"],
             "devoluciones_efectivo": dev["e"],
-            "efectivo_esperado": caja["base_inicial"] + por_metodo["Efectivo"]["total"] - dev["e"],
+            "efectivo_esperado": (caja["base_inicial"] + por_metodo["Efectivo"]["total"] - dev["e"]
+                                  + mov["e"] - mov["s"]),
         }
 
     def cerrar_caja(self, efectivo_contado: int, denominaciones: dict[int, int] | None = None,
-                    observaciones: str = "") -> dict[str, Any]:
-        """Arqueo ciego: compara lo contado contra lo esperado y cierra el turno."""
+                    observaciones: str = "", declarados: dict[str, int | None] | None = None) -> dict[str, Any]:
+        """
+        Arqueo ciego: compara el efectivo contado contra el esperado y cierra el turno.
+        declarados: totales que reporta el cierre del datáfono y las apps de Nequi/Daviplata
+        (dinero que NO entra al cajón: va directo al banco). Se concilian contra el sistema.
+        """
         caja = self.caja_abierta()
         if caja is None:
             raise POSError("No hay ninguna caja abierta.")
+        if int(efectivo_contado) < 0:
+            raise POSError("El efectivo contado no puede ser negativo.")
         res = self.resumen_caja(caja["id"])
+        conciliacion = {}
+        for m, valor in (declarados or {}).items():
+            if valor is None or m == "Efectivo":
+                continue
+            sistema = res["por_metodo"].get(m, {}).get("neto", 0)
+            conciliacion[m] = {"sistema": sistema, "declarado": int(valor), "diferencia": int(valor) - sistema}
         esperado = res["efectivo_esperado"]
         diferencia = int(efectivo_contado) - esperado
         resultado = "CUADRE PERFECTO" if diferencia == 0 else ("SOBRANTE" if diferencia > 0 else "FALTANTE")
@@ -737,18 +861,22 @@ class Database:
                 "UPDATE cierres_caja SET estado='CERRADA', fecha_cierre=?, num_ventas=?, total_ventas=?,"
                 " total_efectivo=?, total_nequi=?, total_daviplata=?, total_datafono=?,"
                 " total_devoluciones=?, devoluciones_efectivo=?, utilidad=?, efectivo_esperado=?,"
-                " efectivo_contado=?, diferencia=?, resultado=?, denominaciones=?, observaciones=?"
+                " efectivo_contado=?, diferencia=?, resultado=?, denominaciones=?, observaciones=?,"
+                " total_entradas=?, total_salidas=?, conciliacion=?"
                 " WHERE id=?",
                 (_ahora(), res["num_ventas"], res["total_ventas"], pm["Efectivo"]["total"],
                  pm["Nequi"]["total"], pm["Daviplata"]["total"], pm["Datáfono"]["total"],
                  res["total_devoluciones"], res["devoluciones_efectivo"], res["utilidad"], esperado,
                  int(efectivo_contado), diferencia, resultado,
                  json.dumps({str(k): v for k, v in (denominaciones or {}).items() if v}),
-                 observaciones, caja["id"]),
+                 observaciones, res["entradas"], res["salidas"], json.dumps(conciliacion, ensure_ascii=False),
+                 caja["id"]),
             )
             self.auditar("CAJA_CERRADA", "cierres_caja", caja["id"],
                          {"esperado": esperado, "contado": int(efectivo_contado), "resultado": resultado}, c)
-        return self.obtener_cierre(caja["id"]) | {"por_metodo": pm}
+        cierre = self.obtener_cierre(caja["id"])
+        cierre["por_metodo"] = pm
+        return cierre
 
     def obtener_cierre(self, caja_id: int) -> dict[str, Any] | None:
         r = self.q1("SELECT * FROM cierres_caja WHERE id=?", (caja_id,))
@@ -759,7 +887,153 @@ class Database:
             "Efectivo": {"total": d["total_efectivo"]}, "Nequi": {"total": d["total_nequi"]},
             "Daviplata": {"total": d["total_daviplata"]}, "Datáfono": {"total": d["total_datafono"]},
         }
+        try:
+            d["conciliacion"] = json.loads(d.get("conciliacion") or "{}")
+        except ValueError:
+            d["conciliacion"] = {}
+        d["movimientos"] = [dict(r) for r in self.movimientos_caja(caja_id)]
         return d
+
+    # ---------- Correcciones de caja ----------
+    def movimientos_caja(self, caja_id: int) -> list[sqlite3.Row]:
+        return self.q("SELECT * FROM movimientos_caja WHERE caja_id=? ORDER BY id", (caja_id,))
+
+    def registrar_movimiento(self, tipo: str, monto: int, concepto: str, cajero: str = "") -> int:
+        """Entrada o salida de efectivo del cajón (pago a proveedor, gasto, retiro, cambio de sencillo)."""
+        tipo = tipo.upper()
+        concepto = (concepto or "").strip()
+        if tipo not in ("ENTRADA", "SALIDA"):
+            raise POSError("Tipo de movimiento no válido.")
+        if int(monto) <= 0:
+            raise POSError("El valor debe ser mayor que cero.")
+        if len(concepto) < 3:
+            raise POSError("Escriba el concepto (por ejemplo: «Pago domicilio», «Retiro dueño»).")
+        caja = self.caja_abierta()
+        if caja is None:
+            raise POSError("Debe haber una caja abierta.")
+        if tipo == "SALIDA" and int(monto) > self.resumen_caja(caja["id"])["efectivo_esperado"]:
+            raise POSError("No hay suficiente efectivo en el cajón para esa salida.")
+        with self.transaccion() as c:
+            cur = c.execute("INSERT INTO movimientos_caja(caja_id, fecha, tipo, concepto, monto, cajero)"
+                            " VALUES (?,?,?,?,?,?)", (caja["id"], _ahora(), tipo, concepto, int(monto), cajero))
+            self.auditar(f"CAJA_{tipo}", "movimientos_caja", cur.lastrowid, {"monto": int(monto), "concepto": concepto}, c)
+            return int(cur.lastrowid)
+
+    def anular_movimiento(self, mov_id: int, motivo: str) -> None:
+        motivo = (motivo or "").strip()
+        if not motivo:
+            raise POSError("Indique el motivo de la anulación.")
+        m = self.q1("SELECT m.*, c.estado FROM movimientos_caja m JOIN cierres_caja c ON c.id=m.caja_id WHERE m.id=?",
+                    (mov_id,))
+        if m is None:
+            raise POSError("Movimiento no encontrado.")
+        if m["anulado"]:
+            raise POSError("Ese movimiento ya está anulado.")
+        if m["estado"] != "ABIERTA":
+            raise POSError("Solo se anulan movimientos de la caja abierta.")
+        with self.transaccion() as c:
+            c.execute("UPDATE movimientos_caja SET anulado=1, anulado_motivo=?, anulado_fecha=? WHERE id=?",
+                      (motivo, _ahora(), mov_id))
+            self.auditar("CAJA_MOVIMIENTO_ANULADO", "movimientos_caja", mov_id,
+                         {"tipo": m["tipo"], "monto": m["monto"], "concepto": m["concepto"], "motivo": motivo}, c)
+
+    def corregir_base(self, nueva_base: int, motivo: str) -> None:
+        caja = self.caja_abierta()
+        if caja is None:
+            raise POSError("No hay caja abierta.")
+        if int(nueva_base) < 0:
+            raise POSError("La base no puede ser negativa.")
+        if not (motivo or "").strip():
+            raise POSError("Indique el motivo de la corrección.")
+        with self.transaccion() as c:
+            c.execute("UPDATE cierres_caja SET base_inicial=? WHERE id=?", (int(nueva_base), caja["id"]))
+            self.auditar("CAJA_BASE_CORREGIDA", "cierres_caja", caja["id"],
+                         {"antes": caja["base_inicial"], "despues": int(nueva_base), "motivo": motivo}, c)
+
+    def anular_apertura(self, motivo: str) -> None:
+        """Elimina una apertura hecha por error (solo si la caja no tiene ningún movimiento)."""
+        caja = self.caja_abierta()
+        if caja is None:
+            raise POSError("No hay caja abierta.")
+        try:
+            with self.transaccion() as c:
+                c.execute("DELETE FROM cierres_caja WHERE id=?", (caja["id"],))
+                self.auditar("CAJA_APERTURA_ANULADA", "cierres_caja", caja["id"],
+                             {"base": caja["base_inicial"], "cajero": caja["cajero"], "motivo": motivo}, c)
+        except sqlite3.IntegrityError as e:
+            raise POSError("Esta caja ya tiene ventas o movimientos: no se puede anular la apertura. "
+                           "Corrija la base o haga el cierre normal.") from e
+
+    def reabrir_caja(self, caja_id: int, motivo: str) -> None:
+        """Reabre el ÚLTIMO cierre (p. ej. se cerró por error o faltó registrar algo)."""
+        if self.caja_abierta():
+            raise POSError("Ya hay una caja abierta: ciérrela o anule su apertura primero.")
+        ultima = self.q1("SELECT * FROM cierres_caja ORDER BY id DESC LIMIT 1")
+        if ultima is None or ultima["id"] != caja_id:
+            raise POSError("Solo se puede reabrir el cierre más reciente.")
+        if not (motivo or "").strip():
+            raise POSError("Indique el motivo de la reapertura.")
+        with self.transaccion() as c:
+            c.execute("UPDATE cierres_caja SET estado='ABIERTA', fecha_cierre=NULL, efectivo_contado=NULL,"
+                      " efectivo_esperado=NULL, diferencia=NULL, resultado=NULL, reaperturas=reaperturas+1"
+                      " WHERE id=?", (caja_id,))
+            self.auditar("CAJA_REABIERTA", "cierres_caja", caja_id,
+                         {"resultado_previo": ultima["resultado"], "contado_previo": ultima["efectivo_contado"],
+                          "motivo": motivo}, c)
+
+    def cambiar_metodo_pago(self, venta_id: int, nuevo: str, motivo: str, cajero: str = "") -> None:
+        """Corrige el método de pago (p. ej. se marcó Efectivo pero pagó con tarjeta débito)."""
+        if nuevo not in cfg.METODOS_PAGO:
+            raise POSError("Método de pago no válido.")
+        v = self.q1("SELECT v.*, c.estado AS estado_caja FROM ventas v JOIN cierres_caja c ON c.id=v.caja_id"
+                    " WHERE v.id=?", (venta_id,))
+        if v is None:
+            raise POSError("Tiquete no encontrado.")
+        if v["metodo_pago"] == nuevo:
+            raise POSError("El tiquete ya tiene ese método de pago.")
+        if v["estado_caja"] != "ABIERTA":
+            raise POSError("La caja de esa venta ya se cerró: el método no se puede cambiar.")
+        if v["total_devuelto"]:
+            raise POSError("El tiquete tiene devoluciones: no se puede cambiar el método de pago.")
+        if not (motivo or "").strip():
+            raise POSError("Indique el motivo de la corrección.")
+        if nuevo == "Efectivo" or v["metodo_pago"] == "Efectivo":
+            res = self.resumen_caja(v["caja_id"])
+            if v["metodo_pago"] == "Efectivo" and res["efectivo_esperado"] < v["total"]:
+                raise POSError("El efectivo del cajón no alcanza para esta corrección.")
+        with self.transaccion() as c:
+            c.execute("UPDATE ventas SET metodo_pago=? WHERE id=?", (nuevo, venta_id))
+            self._evento(c, venta_id, v["numero_tiquete"], "CORRECCION",
+                         f"Método de pago: {v['metodo_pago']} → {nuevo} · Motivo: {motivo}", 0, cajero)
+            self.auditar("METODO_PAGO_CORREGIDO", "ventas", v["numero_tiquete"],
+                         {"antes": v["metodo_pago"], "despues": nuevo, "motivo": motivo}, c)
+
+    # ---------- Clave de administrador ----------
+    def tiene_pin(self) -> bool:
+        return bool(self.get_config("pin_admin", ""))
+
+    def definir_pin(self, pin: str, pin_actual: str | None = None) -> None:
+        pin = (pin or "").strip()
+        if not pin.isdigit() or not 4 <= len(pin) <= 8:
+            raise POSError("La clave debe tener entre 4 y 8 dígitos.")
+        if self.tiene_pin() and not self.verificar_pin(pin_actual or ""):
+            raise POSError("La clave actual no es correcta.")
+        import hashlib
+        import secrets
+        sal = secrets.token_hex(8)
+        h = hashlib.pbkdf2_hmac("sha256", pin.encode(), sal.encode(), 120_000).hex()
+        self.set_config({"pin_admin": f"{sal}${h}"}, auditar=False)
+        self.auditar("CLAVE_ADMIN_DEFINIDA", "configuracion")
+
+    def verificar_pin(self, pin: str) -> bool:
+        guardado = self.get_config("pin_admin", "")
+        if not guardado:
+            return True
+        import hashlib
+        import hmac
+        sal, h = guardado.split("$", 1)
+        calc = hashlib.pbkdf2_hmac("sha256", (pin or "").strip().encode(), sal.encode(), 120_000).hex()
+        return hmac.compare_digest(calc, h)
 
     def historial_cierres(self, limite: int = 200) -> list[sqlite3.Row]:
         return self.q("SELECT * FROM cierres_caja ORDER BY id DESC LIMIT ?", (limite,))
@@ -1127,3 +1401,65 @@ def crear_bd_limpia(destino: Path) -> Path:
     db.conn.execute("PRAGMA journal_mode=DELETE")  # archivo único, sin -wal/-shm
     db.close()
     return destino
+
+
+def reiniciar_datos(db: "Database", conservar_inventario: bool) -> tuple["Database", Path]:
+    """
+    Deja el programa en blanco. SIEMPRE guarda antes una copia completa en respaldos/.
+      conservar_inventario=False -> programa virgen (todo de fábrica).
+      conservar_inventario=True  -> borra ventas, caja, historial y auditoría; conserva productos
+                                    (con su stock) y la configuración; el consecutivo vuelve al inicio.
+    Devuelve (nueva_base_de_datos, ruta_del_respaldo).
+    """
+    ruta = db.path
+    respaldo = db.respaldar(cfg.backups_dir() / f"antes_de_reinicio_{datetime.now():%Y%m%d_%H%M%S}.db",
+                            conservar=10_000)
+    productos = [dict(r) for r in db.q("SELECT * FROM productos")] if conservar_inventario else []
+    config = db.get_all_config() if conservar_inventario else {}
+    formato = db.get_config("formato_carga_columnas", "") if conservar_inventario else ""
+    db.close()
+    for sufijo in ("", "-wal", "-shm"):
+        p = Path(str(ruta) + sufijo)
+        if p.exists():
+            p.unlink()
+    nueva = Database(ruta)
+    if conservar_inventario:
+        config.pop("pin_admin", None)
+        config["consecutivo_siguiente"] = config.get("rango_desde", cfg.DEFAULT_CONFIG["rango_desde"])
+        config.pop("aviso_resolucion_visto", None)
+        if formato:
+            config["formato_carga_columnas"] = formato
+        nueva.set_config(config, auditar=False)
+        if productos:
+            cols = [k for k in productos[0] if k != "id"]
+            with nueva.transaccion() as c:
+                c.executemany(f"INSERT INTO productos({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                              [tuple(p[k] for k in cols) for p in productos])
+    nueva.auditar("REINICIO_DATOS", "base_datos", "",
+                  {"conservar_inventario": conservar_inventario, "respaldo": str(respaldo)})
+    return nueva, respaldo
+
+
+def restaurar_respaldo(db: "Database", archivo: Path) -> tuple["Database", Path]:
+    """Reemplaza la base de datos por un respaldo (guarda antes la actual)."""
+    archivo = Path(archivo)
+    prueba = sqlite3.connect(str(archivo))
+    try:
+        tablas = {r[0] for r in prueba.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    finally:
+        prueba.close()
+    if not {"productos", "ventas", "configuracion"} <= tablas:
+        raise POSError("Ese archivo no es un respaldo válido de ConfeccionesR4.")
+    ruta = db.path
+    previo = db.respaldar(cfg.backups_dir() / f"antes_de_restaurar_{datetime.now():%Y%m%d_%H%M%S}.db",
+                          conservar=10_000)
+    db.close()
+    for sufijo in ("-wal", "-shm"):
+        p = Path(str(ruta) + sufijo)
+        if p.exists():
+            p.unlink()
+    import shutil
+    shutil.copy2(archivo, ruta)
+    nueva = Database(ruta)                     # migra si el respaldo es de una versión anterior
+    nueva.auditar("RESPALDO_RESTAURADO", "base_datos", "", {"archivo": archivo.name, "previo": str(previo)})
+    return nueva, previo
