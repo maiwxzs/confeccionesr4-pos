@@ -179,11 +179,35 @@ def aplicar(nuevo: Path) -> None:
     _lanzar(exe)
 
 
-def _lanzar(exe: Path) -> None:
+def entorno_limpio() -> dict[str, str]:
+    """
+    Entorno para lanzar OTRA instancia del .exe de un solo archivo.
+    Sin esto, la instancia nueva hereda las variables internas de PyInstaller y reutiliza la
+    carpeta temporal (_MEI…) de la instancia vieja; cuando la vieja se cierra, Windows borra esa
+    carpeta y la nueva falla con «No module named numpy._core…» / «WinError 3».
+    PYINSTALLER_RESET_ENVIRONMENT=1 es el mecanismo oficial de PyInstaller (>= 6.9) para evitarlo.
+    """
+    env = {k: v for k, v in os.environ.items()
+           if not k.upper().startswith(("_PYI", "_MEIPASS")) and k.upper() not in ("TCL_LIBRARY", "TK_LIBRARY")}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
+def relanzar(exe: Path | str | None = None, args: list[str] | None = None) -> None:
+    """Inicia una instancia nueva e independiente del programa (tras actualizar o reiniciar datos)."""
+    exe = Path(exe or sys.executable)
     flags = 0
     if sys.platform == "win32":
         flags = 0x00000008 | 0x00000200      # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen([str(exe)], close_fds=True, creationflags=flags, cwd=str(exe.parent))
+    if getattr(sys, "frozen", False):
+        cmd = [str(exe)] + list(args or [])
+    else:                                    # desarrollo: python main.py
+        cmd = [sys.executable, str(Path(__file__).with_name("main.py"))] + list(args or [])
+    subprocess.Popen(cmd, close_fds=True, creationflags=flags, cwd=str(exe.parent), env=entorno_limpio())
+
+
+def _lanzar(exe: Path) -> None:
+    relanzar(exe)
 
 
 def _aplicar_como_administrador(nuevo: Path, exe: Path) -> None:
@@ -211,8 +235,8 @@ def modo_aplicar_desde_argv(argv: list[str]) -> bool:
             time.sleep(0.5)
     import shutil
     shutil.copy2(sys.executable, destino)
-    # Relanzar SIN privilegios de administrador (a través del Explorador)
-    subprocess.Popen(["explorer.exe", str(destino)])
+    # Relanzar SIN privilegios de administrador (a través del Explorador) y con entorno limpio
+    subprocess.Popen(["explorer.exe", str(destino)], env=entorno_limpio())
     return True
 
 
