@@ -25,6 +25,7 @@ import printer_engine as pe
 from database import POSError
 from ui import theme
 from ui.animations import DialogoAnimado, aparecer, destello
+from ui.seguridad import autorizar, pedir_motivo
 from ui.widgets import (AlignCenter, AlignRight, Contexto, boton, confirmar, en_segundo_plano, error, etiqueta,
                         exportar_y_ofrecer_abrir, refrescar_estilo, tarjeta)
 
@@ -163,8 +164,12 @@ class DevolucionDialog(DialogoAnimado):
             error(self, "Escriba o seleccione el motivo de la devolución.")
             self.motivo.setFocus()
             return
-        if not confirmar(self, f"¿Registrar la devolución por {self.lbl_total.text()}?\n\n"
-                               "Esta operación queda en la auditoría y no se puede deshacer."):
+        completo = all(sp.value() == sp.maximum() for sp in self.spins.values())
+        if completo and not autorizar(self, self.ctx, f"Anular el tiquete {self.venta['numero_tiquete']} "
+                                                      f"por {self.lbl_total.text()}."):
+            return
+        if not completo and not confirmar(self, f"¿Registrar la devolución por {self.lbl_total.text()}?\n\n"
+                                                "Esta operación queda en la auditoría y no se puede deshacer."):
             return
         try:
             self.resultado = self.ctx.db.registrar_devolucion(
@@ -305,6 +310,9 @@ class HistorialView(QWidget):
         botones.addWidget(self.btn_reimp, 1)
         botones.addWidget(self.btn_dev, 1)
         dl.addLayout(botones)
+        self.btn_metodo = boton("Corregir método de pago (ej. era débito, no efectivo)", "ghost")
+        self.btn_metodo.clicked.connect(self.corregir_metodo)
+        dl.addWidget(self.btn_metodo)
         split.addWidget(self.detalle)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
@@ -388,6 +396,7 @@ class HistorialView(QWidget):
     # ------------------------------------------------------------------ detalle
     def _habilitar(self, on: bool) -> None:
         self.btn_reimp.setEnabled(on)
+        self.btn_metodo.setEnabled(on and bool(self.venta) and not self.venta["total_devuelto"])
         self.btn_dev.setEnabled(on and bool(self.venta) and self.venta["estado"] != "ANULADO")
 
     def _limpiar_detalle(self) -> None:
@@ -497,6 +506,35 @@ class HistorialView(QWidget):
             self.buscar()
             self.mostrar(self.venta["id"])
             destello(self.detalle, theme.T["danger"], 800, 16)
+
+    def corregir_metodo(self) -> None:
+        if not self.venta:
+            return
+        v = self.venta
+        from PySide6.QtWidgets import QInputDialog
+        opciones = [m for m in cfg.METODOS_PAGO if m != v["metodo_pago"]]
+        nuevo, ok = QInputDialog.getItem(self, "Corregir método de pago",
+                                         f"{v['numero_tiquete']} quedó como «{v['metodo_pago']}».\n"
+                                         "¿Con qué pagó realmente el cliente?", opciones, 0, False)
+        if not ok:
+            return
+        if not autorizar(self, self.ctx, f"Cambiar el método de pago de {v['numero_tiquete']}: "
+                                         f"{v['metodo_pago']} → {nuevo}."):
+            return
+        motivo = pedir_motivo(self, "Motivo de la corrección", "", ["Se marcó el método equivocado",
+                                                                   "Pagó con tarjeta débito", "Pagó por Nequi"])
+        if not motivo:
+            return
+        try:
+            self.ctx.db.cambiar_metodo_pago(v["id"], nuevo, motivo, self.ctx.db.get_config("cajero_actual"))
+        except POSError as e:
+            error(self, str(e))
+            return
+        self.ctx.notificar(f"{v['numero_tiquete']}: método corregido a {nuevo}", "ok")
+        self.ctx.bus.ventas_cambiadas.emit()
+        self.ctx.bus.caja_cambiada.emit()
+        self.buscar()
+        self.mostrar(v["id"])
 
     def exportar(self) -> None:
         desde, hasta = self._rango()

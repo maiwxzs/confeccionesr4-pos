@@ -22,6 +22,7 @@ import printer_engine as pe
 from database import POSError
 from ui import theme
 from ui.animations import DialogoAnimado, escalonado
+from ui.seguridad import autorizar, pedir_monto, pedir_motivo
 from ui.widgets import (AlignCenter, AlignRight, Contexto, KpiCard, MoneyEdit, boton, confirmar,
                         en_segundo_plano, error, etiqueta, exportar_y_ofrecer_abrir, tarjeta)
 
@@ -75,6 +76,9 @@ class AperturaDialog(DialogoAnimado):
 
     def abrir(self) -> None:
         cajero = self.cajero.text().strip() or "Cajero"
+        if self.base.valor() > 1_000_000 and not confirmar(
+                self, f"La base inicial es {cfg.cop(self.base.valor())}.\n¿Es correcto? (revise que no sobren ceros)"):
+            return
         try:
             self.ctx.db.abrir_caja(self.base.valor(), cajero)
         except POSError as e:
@@ -95,11 +99,11 @@ class ArqueoDialog(DialogoAnimado):
         self.ctx = ctx
         self.cierre: dict | None = None
         self.setWindowTitle("Arqueo ciego y cierre de caja")
-        self.setMinimumSize(620, 640)
+        self.setMinimumSize(700, 720)
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
         lay.addWidget(etiqueta("Arqueo ciego", titulo=True))
-        lay.addWidget(etiqueta("Cuente el dinero físico del cajón e ingrese la cantidad de billetes y monedas. "
+        lay.addWidget(etiqueta("Cuente el efectivo (del cajón, la caja o donde lo guarde) e ingrese billetes y monedas. "
                                "El sistema NO muestra el valor esperado hasta confirmar.", muted=True))
         lay.itemAt(1).widget().setWordWrap(True)
 
@@ -147,9 +151,23 @@ class ArqueoDialog(DialogoAnimado):
         self.lbl_total.setAlignment(AlignRight)
         fila_tot.addWidget(self.lbl_total, 1)
         lay.addLayout(fila_tot)
+        # Conciliación de pagos digitales: ese dinero NO está en el cajón (va directo al banco)
+        lay.addWidget(etiqueta("PAGOS DIGITALES (opcional) — escriba lo que reporta el cierre del datáfono "
+                               "y las apps; el sistema lo compara con las ventas", kpiTitulo=True))
+        conc = QGridLayout()
+        conc.setHorizontalSpacing(10)
+        self.declarados: dict[str, MoneyEdit] = {}
+        for j, (m, txt) in enumerate((("Datáfono", "Cierre del datáfono (débito/crédito)"),
+                                      ("Nequi", "Recibido en Nequi"), ("Daviplata", "Recibido en Daviplata"))):
+            conc.addWidget(etiqueta(txt, muted=True), 0, j)
+            me = MoneyEdit(grande=False, placeholder="No verificar")
+            self.declarados[m] = me
+            conc.addWidget(me, 1, j)
+        lay.addLayout(conc)
         self.obs = QLineEdit()
-        self.obs.setPlaceholderText("Observaciones (opcional)")
+        self.obs.setPlaceholderText("Observaciones (obligatorias si hay diferencias)")
         lay.addWidget(self.obs)
+        self._intentos = 0
 
         fila = QHBoxLayout()
         cancelar = boton("Cancelar", "ghost", "lg")
@@ -181,12 +199,27 @@ class ArqueoDialog(DialogoAnimado):
 
     def cerrar(self) -> None:
         total = self.total()
+        caja = self.ctx.db.caja_abierta()
+        esperado = self.ctx.db.resumen_caja(caja["id"])["efectivo_esperado"] if caja else 0
+        # Arqueo ciego con un reconteo: si no cuadra, se pide contar otra vez SIN revelar la cifra
+        if total != esperado and self._intentos == 0:
+            self._intentos = 1
+            error(self, "El conteo no coincide con el sistema.\n\nPor favor cuente el dinero otra vez con calma "
+                        "(billetes pegados, monedas en otro compartimiento…).\nLe queda 1 intento; después la caja "
+                        "se cierra con la diferencia.", "Recuente por favor")
+            return
+        if total != esperado and len(self.obs.text().strip()) < 5:
+            error(self, "Hay una diferencia en el efectivo. Escriba una observación que la explique "
+                        "(queda en el reporte de cierre).")
+            self.obs.setFocus()
+            return
         if not confirmar(self, f"Efectivo contado: {cfg.cop(total)}\n\n"
-                               "¿Confirmar el arqueo y CERRAR la caja?\nEsta acción no se puede deshacer."):
+                               "¿Confirmar el arqueo y CERRAR la caja?"):
             return
         denoms = {} if self.chk_manual.isChecked() else {d: sp.value() for d, sp in self.spins.items()}
+        declarados = {m: (me.valor() if me.tiene_valor() else None) for m, me in self.declarados.items()}
         try:
-            self.cierre = self.ctx.db.cerrar_caja(total, denoms, self.obs.text().strip())
+            self.cierre = self.ctx.db.cerrar_caja(total, denoms, self.obs.text().strip(), declarados)
         except POSError as e:
             error(self, str(e))
             return
@@ -236,6 +269,12 @@ class ResultadoCierreDialog(DialogoAnimado):
             ("= Efectivo esperado", cfg.cop(cierre["efectivo_esperado"])),
             ("Efectivo contado", cfg.cop(cierre["efectivo_contado"])),
         ]
+        if cierre.get("total_entradas") or cierre.get("total_salidas"):
+            filas[-2:-2] = [("+ Entradas de efectivo", cfg.cop(cierre.get("total_entradas", 0))),
+                            ("− Salidas (gastos / retiros)", cfg.cop(cierre.get("total_salidas", 0)))]
+        for m, d in (cierre.get("conciliacion") or {}).items():
+            filas += [("", ""), (f"{m}: sistema / reportado", f"{cfg.cop(d['sistema'])} / {cfg.cop(d['declarado'])}"),
+                      (f"{m}: diferencia", "OK" if d["diferencia"] == 0 else cfg.cop(d["diferencia"]))]
         g = QGridLayout()
         g.setVerticalSpacing(4)
         for i, (k, v) in enumerate(filas):
@@ -303,6 +342,9 @@ class CajaView(QWidget):
         b_exp.clicked.connect(lambda: exportar_y_ofrecer_abrir(
             self, ctx, f"Historial_Cierres_{datetime.now():%Y%m%d}.xlsx",
             lambda ruta: xe.exportar_cierres(ctx.db, ruta)))
+        b_reabrir = boton("Reabrir último cierre", "ghost")
+        b_reabrir.clicked.connect(self.reabrir)
+        cab.addWidget(b_reabrir)
         cab.addWidget(b_ver)
         cab.addWidget(b_exp)
         hl.addLayout(cab)
@@ -353,14 +395,26 @@ class CajaView(QWidget):
         self.lbl_info = etiqueta("", muted=True)
         col.addWidget(self.lbl_info)
         il.addLayout(col, 1)
-        cajon = boton("Abrir cajón", size="lg")
-        cajon.clicked.connect(self.abrir_cajon)
-        il.addWidget(cajon)
+        self.btn_cajon = boton("Abrir cajón", size="lg")
+        self.btn_cajon.clicked.connect(self.abrir_cajon)
+        il.addWidget(self.btn_cajon)
         cerrar = boton("ARQUEO CIEGO Y CIERRE", "primary", "lg")
         cerrar.setMinimumWidth(280)
         cerrar.clicked.connect(self.arqueo)
         il.addWidget(cerrar)
         lay.addWidget(info)
+
+        acciones = QHBoxLayout()
+        acciones.setSpacing(8)
+        for txt, fn, var in (("Entrada de efectivo", lambda: self.movimiento("ENTRADA"), None),
+                             ("Salida / gasto", lambda: self.movimiento("SALIDA"), None),
+                             ("Corregir base inicial", self.corregir_base, "ghost"),
+                             ("Anular apertura (abierta por error)", self.anular_apertura, "danger")):
+            b = boton(txt, var)
+            b.clicked.connect(fn)
+            acciones.addWidget(b)
+        acciones.addStretch()
+        lay.addLayout(acciones)
 
         grid = QGridLayout()
         grid.setSpacing(14)
@@ -377,6 +431,27 @@ class CajaView(QWidget):
         for i, k in enumerate((self.kpi_total, self.kpi_dev, self.kpi_utl, self.kpi_esp)):
             grid.addWidget(k, 1, i)
         lay.addLayout(grid)
+
+        movs = tarjeta()
+        ml = QVBoxLayout(movs)
+        ml.setContentsMargins(14, 10, 14, 10)
+        cab = QHBoxLayout()
+        cab.addWidget(etiqueta("Entradas y salidas de efectivo del turno", kpiTitulo=True))
+        cab.addStretch()
+        b_anular = boton("Anular movimiento seleccionado", "danger", size="sm")
+        b_anular.clicked.connect(self.anular_movimiento)
+        cab.addWidget(b_anular)
+        ml.addLayout(cab)
+        self.tabla_mov = QTableWidget(0, 5)
+        self.tabla_mov.setHorizontalHeaderLabels(["Hora", "Tipo", "Concepto", "Valor", "Estado"])
+        self.tabla_mov.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.tabla_mov.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.tabla_mov.verticalHeader().setVisible(False)
+        self.tabla_mov.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tabla_mov.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.tabla_mov.setMaximumHeight(150)
+        ml.addWidget(self.tabla_mov)
+        lay.addWidget(movs)
         return w
 
     # ------------------------------------------------------------------ datos
@@ -384,12 +459,27 @@ class CajaView(QWidget):
         db = self.ctx.db
         caja = db.caja_abierta()
         self.stack.setCurrentIndex(1 if caja else 0)
+        self.btn_cajon.setVisible(db.get_config("abrir_cajon_efectivo") == "1")
         if caja:
             r = db.resumen_caja(caja["id"])
             ciego = db.get_config("arqueo_ciego") == "1"
             self.lbl_info.setText(
                 f"Desde {_fecha(caja['fecha_apertura'])}  ·  Cajero: {caja['cajero']}  ·  "
-                f"Base inicial: {cfg.cop(caja['base_inicial'])}")
+                f"Base inicial: {cfg.cop(caja['base_inicial'])}  ·  Entradas {cfg.cop(r['entradas'])}  ·  "
+                f"Salidas {cfg.cop(r['salidas'])}")
+            movs = self.ctx.db.movimientos_caja(caja["id"])
+            self.tabla_mov.setRowCount(len(movs))
+            for i, m in enumerate(movs):
+                vals = [m["fecha"][11:16], m["tipo"], m["concepto"], cfg.cop(m["monto"]),
+                        f"ANULADO: {m['anulado_motivo']}" if m["anulado"] else "Vigente"]
+                for j, v in enumerate(vals):
+                    it = QTableWidgetItem(v)
+                    it.setData(Qt.ItemDataRole.UserRole, m["id"])
+                    if j == 3:
+                        it.setTextAlignment(AlignRight)
+                    if m["anulado"]:
+                        it.setForeground(QColor(theme.T["muted"]))
+                    self.tabla_mov.setItem(i, j, it)
             for m, k in self.kpi_metodo.items():
                 dat = r["por_metodo"].get(m, {"cantidad": 0, "total": 0})
                 dev = f" · devuelto {cfg.cop(dat['devuelto'])}" if dat.get("devuelto") else ""
@@ -407,7 +497,7 @@ class CajaView(QWidget):
             if ciego:
                 self.kpi_esp.set_valor("$ ••••••", "Se revela al cerrar")
             else:
-                self.kpi_esp.set_monto(r["efectivo_esperado"], "Base + efectivo − devoluciones")
+                self.kpi_esp.set_monto(r["efectivo_esperado"], "Base + efectivo − devol. ± movimientos")
         self._llenar_historial()
 
     def _llenar_historial(self) -> None:
@@ -462,3 +552,98 @@ class CajaView(QWidget):
         datos = pe.construir_apertura_cajon(conf).bytes()
         en_segundo_plano(lambda: pe.enviar(datos, conf, titulo="Cajon"),
                          al_fallar=lambda m: self.ctx.notificar(f"No se pudo abrir el cajón: {m}", "error"))
+
+    # ------------------------------------------------------------------ correcciones
+    def movimiento(self, tipo: str) -> None:
+        conceptos = (["Pago domicilio", "Pago proveedor", "Servicios / arriendo", "Retiro del dueño",
+                      "Consignación al banco", "Compra de insumos"] if tipo == "SALIDA"
+                     else ["Cambio de sencillo", "Aporte del dueño", "Abono de cliente"])
+        titulo = "Salida de efectivo (gasto / retiro)" if tipo == "SALIDA" else "Entrada de efectivo"
+        r = pedir_monto(self, titulo, "Queda registrado en el turno y ajusta el efectivo esperado del arqueo.",
+                        conceptos=conceptos)
+        if not r:
+            return
+        monto, concepto = r
+        if monto >= 500_000 and not confirmar(self, f"¿Confirma {titulo.lower()} por {cfg.cop(monto)}?"):
+            return
+        try:
+            self.ctx.db.registrar_movimiento(tipo, monto, concepto, self.ctx.db.get_config("cajero_actual"))
+        except POSError as e:
+            error(self, str(e))
+            return
+        if tipo == "SALIDA" and self.ctx.db.get_config("abrir_cajon_efectivo") == "1":
+            self.abrir_cajon()
+        self.ctx.notificar(f"{titulo}: {cfg.cop(monto)} · {concepto}", "ok")
+        self.ctx.bus.caja_cambiada.emit()
+
+    def anular_movimiento(self) -> None:
+        fila = self.tabla_mov.currentRow()
+        if fila < 0:
+            error(self, "Seleccione el movimiento a anular.")
+            return
+        mid = int(self.tabla_mov.item(fila, 0).data(Qt.ItemDataRole.UserRole))
+        if not autorizar(self, self.ctx, "Anular un movimiento de efectivo registrado por error."):
+            return
+        motivo = pedir_motivo(self, "Anular movimiento", "¿Por qué se anula?",
+                              ["Registrado por error", "Valor equivocado", "Registrado dos veces"])
+        if not motivo:
+            return
+        try:
+            self.ctx.db.anular_movimiento(mid, motivo)
+        except POSError as e:
+            error(self, str(e))
+            return
+        self.ctx.notificar("Movimiento anulado", "ok")
+        self.ctx.bus.caja_cambiada.emit()
+
+    def corregir_base(self) -> None:
+        caja = self.ctx.db.caja_abierta()
+        if not caja or not autorizar(self, self.ctx, "Corregir la base inicial de la caja abierta."):
+            return
+        r = pedir_monto(self, "Corregir base inicial", f"Base registrada: {cfg.cop(caja['base_inicial'])}",
+                        valor=caja["base_inicial"])
+        if not r:
+            return
+        motivo = pedir_motivo(self, "Motivo de la corrección", "", ["Error al digitar la base", "Se agregó sencillo"])
+        if not motivo:
+            return
+        try:
+            self.ctx.db.corregir_base(r[0], motivo)
+        except POSError as e:
+            error(self, str(e))
+            return
+        self.ctx.notificar(f"Base corregida a {cfg.cop(r[0])}", "ok")
+        self.ctx.bus.caja_cambiada.emit()
+
+    def anular_apertura(self) -> None:
+        if not autorizar(self, self.ctx, "Anular la apertura de caja (solo si se abrió por error y no tiene ventas)."):
+            return
+        motivo = pedir_motivo(self, "Anular apertura", "", ["Abierta por error", "Abierta dos veces"])
+        if not motivo:
+            return
+        try:
+            self.ctx.db.anular_apertura(motivo)
+        except POSError as e:
+            error(self, str(e))
+            return
+        self.ctx.notificar("Apertura anulada", "ok")
+        self.ctx.bus.caja_cambiada.emit()
+
+    def reabrir(self) -> None:
+        ultimo = self.ctx.db.q1("SELECT * FROM cierres_caja ORDER BY id DESC LIMIT 1")
+        if ultimo is None or ultimo["estado"] != "CERRADA":
+            error(self, "No hay un cierre para reabrir (o ya hay una caja abierta).")
+            return
+        if not autorizar(self, self.ctx, f"Reabrir el cierre N.º {ultimo['id']} del {_fecha(ultimo['fecha_cierre'])}."):
+            return
+        motivo = pedir_motivo(self, "Reabrir caja", "Se volverá a hacer el arqueo al cerrar.",
+                              ["Se cerró por error", "Faltó registrar un gasto", "Faltó registrar una venta"])
+        if not motivo:
+            return
+        try:
+            self.ctx.db.reabrir_caja(ultimo["id"], motivo)
+        except POSError as e:
+            error(self, str(e))
+            return
+        self.ctx.notificar(f"Caja N.º {ultimo['id']} reabierta", "ok")
+        self.ctx.bus.caja_cambiada.emit()

@@ -11,6 +11,7 @@ import config as cfg
 import printer_engine as pe
 import excel_engine as xe
 from ui.animations import DialogoAnimado
+from ui.seguridad import autorizar
 from ui.widgets import (Contexto, abrir_archivo, boton, confirmar, en_segundo_plano, error, etiqueta,
                         exportar_y_ofrecer_abrir, info)
 
@@ -40,6 +41,7 @@ class ConfiguracionDialog(DialogoAnimado):
         tabs.addTab(self._tab_impresion(), "Impresora de tiquetes")
         tabs.addTab(self._tab_etiquetas(), "Etiquetas")
         tabs.addTab(self._tab_operacion(), "Operación")
+        tabs.addTab(self._tab_seguridad(), "Seguridad")
         tabs.addTab(self._tab_datos(), "Datos y respaldos")
         tabs.addTab(self._tab_actualizaciones(), "Actualizaciones")
         lay.addWidget(tabs, 1)
@@ -156,7 +158,8 @@ class ConfiguracionDialog(DialogoAnimado):
         f.addRow("Tabla de caracteres", self._combo("codepage", [
             ("PC850 Multilingüe (recomendado Jaltech)", "cp850"), ("PC858 (con €)", "cp858"),
             ("WPC1252 Windows Latin", "cp1252"), ("PC437 EE. UU. (sin tildes)", "cp437")]))
-        f.addRow("", self._check("abrir_cajon_efectivo", "Abrir cajón monedero en ventas de efectivo"))
+        f.addRow("", self._check("abrir_cajon_efectivo", "Tengo cajón monedero conectado a la impresora "
+                                                         "(se abre solo al cobrar en efectivo)"))
         f.addRow("", self._check("imprimir_codigo_barras_tiquete", "Imprimir código de barras del tiquete "
                                                                     "(para devoluciones rápidas)"))
         f.addRow("USB Vendor ID", self._linea("usb_vendor_id"))
@@ -223,12 +226,121 @@ class ConfiguracionDialog(DialogoAnimado):
                         "respaldos a una USB o a la nube.", muted=True)
         nota.setWordWrap(True)
         f.addRow("", nota)
+        restaurar = boton("Restaurar un respaldo…")
+        restaurar.clicked.connect(self._restaurar)
+        reiniciar = boton("Borrar datos / dejar listo para ENTREGAR…", "danger")
+        reiniciar.clicked.connect(self._reiniciar)
+        fila2 = QHBoxLayout()
+        fila2.addWidget(restaurar)
+        fila2.addWidget(reiniciar)
+        fila2.addStretch()
+        f.addRow("Recuperación", fila2)
         aud = boton("Exportar auditoría a Excel")
         aud.clicked.connect(lambda: exportar_y_ofrecer_abrir(
             self, self.ctx, "Auditoria_ConfeccionesR4.xlsx", lambda ruta: xe.exportar_auditoria(self.ctx.db, ruta)))
         f.addRow("Auditoría", aud)
         f.addRow("Versión", QLabel(f"{cfg.APP_NAME} {cfg.APP_VERSION}"))
         return w
+
+    def _tab_seguridad(self) -> QWidget:
+        w, f = _form()
+        estado = "DEFINIDA" if self.ctx.db.tiene_pin() else "NO definida (recomendado crearla)"
+        self.lbl_pin = QLabel(f"Clave de administrador: {estado}")
+        f.addRow(self.lbl_pin)
+        self.pin_actual = QLineEdit()
+        self.pin_nuevo = QLineEdit()
+        self.pin_rep = QLineEdit()
+        for e, ph in ((self.pin_actual, "Clave actual (si ya existe)"), (self.pin_nuevo, "Nueva clave (4 a 8 dígitos)"),
+                      (self.pin_rep, "Repita la nueva clave")):
+            e.setEchoMode(QLineEdit.EchoMode.Password)
+            e.setMaxLength(8)
+            e.setPlaceholderText(ph)
+        if self.ctx.db.tiene_pin():
+            f.addRow("Clave actual", self.pin_actual)
+        f.addRow("Nueva clave", self.pin_nuevo)
+        f.addRow("Repetir", self.pin_rep)
+        b = boton("Guardar clave", "primary")
+        b.clicked.connect(self._guardar_pin)
+        f.addRow("", b)
+        nota = etiqueta("La clave se pide para: anular tiquetes, corregir el método de pago, corregir la base, "
+                        "anular aperturas, reabrir cierres, anular movimientos de caja, eliminar productos, "
+                        "deshacer importaciones, descuentos mayores al 30 %, restaurar respaldos y borrar datos. "
+                        "Las ventas y devoluciones parciales del día a día no la piden.", muted=True)
+        nota.setWordWrap(True)
+        f.addRow("", nota)
+        return w
+
+    def _guardar_pin(self) -> None:
+        if self.pin_nuevo.text() != self.pin_rep.text():
+            error(self, "Las claves no coinciden.")
+            return
+        try:
+            self.ctx.db.definir_pin(self.pin_nuevo.text(), self.pin_actual.text())
+        except Exception as e:  # noqa: BLE001
+            error(self, str(e))
+            return
+        for e in (self.pin_actual, self.pin_nuevo, self.pin_rep):
+            e.clear()
+        self.lbl_pin.setText("Clave de administrador: DEFINIDA")
+        info(self, "Clave de administrador guardada. Anótela en un lugar seguro.")
+
+    def _reiniciar_app(self, nueva_db) -> None:
+        """Reemplaza la conexión y reinicia el programa para cargar los datos nuevos."""
+        from PySide6.QtWidgets import QApplication
+
+        import updater
+        self.ctx.db = nueva_db
+        app = QApplication.instance()
+        app.setProperty("actualizando", True)
+        updater.relanzar()          # instancia nueva con entorno limpio (ver updater.entorno_limpio)
+        app.closeAllWindows()
+        app.quit()
+
+    def _restaurar(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        import database as dbm
+        ruta, _ = QFileDialog.getOpenFileName(self, "Elija el respaldo a restaurar", str(cfg.backups_dir()),
+                                              "Respaldo (*.db)")
+        if not ruta or not autorizar(self, self.ctx, "Restaurar un respaldo: los datos actuales se reemplazan "
+                                                     "(antes se guarda una copia de ellos)."):
+            return
+        try:
+            nueva, previo = dbm.restaurar_respaldo(self.ctx.db, ruta)
+        except Exception as e:  # noqa: BLE001
+            error(self, f"No se pudo restaurar:\n{e}")
+            return
+        info(self, f"Respaldo restaurado. Los datos anteriores quedaron guardados en:\n{previo}\n\n"
+                   "El programa se reiniciará.")
+        self._reiniciar_app(nueva)
+
+    def _reiniciar(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        import database as dbm
+        opciones = ["Dejar listo para ENTREGAR: borrar TODO (al abrir, el nuevo dueño configura su negocio)",
+                    "Borrar solo ventas, cajas e historial (conservar inventario y configuración)"]
+        eleccion, ok = QInputDialog.getItem(self, "Borrar datos", "¿Qué desea borrar?\n"
+                                            "En ambos casos se guarda antes un respaldo completo.", opciones, 0, False)
+        if not ok:
+            return
+        conservar = eleccion == opciones[1]
+        if not autorizar(self, self.ctx, eleccion):
+            return
+        texto, ok = QInputDialog.getText(self, "Confirmación final",
+                                         "Esta acción borra los datos del programa.\nEscriba BORRAR para confirmar:")
+        if not ok or texto.strip().upper() != "BORRAR":
+            info(self, "No se borró nada.")
+            return
+        try:
+            nueva, respaldo = dbm.reiniciar_datos(self.ctx.db, conservar)
+        except Exception as e:  # noqa: BLE001
+            error(self, f"No se pudo reiniciar:\n{e}")
+            return
+        extra = ("\n\nAl abrir, aparecerá el asistente de configuración inicial para el nuevo dueño."
+                 if not conservar else "")
+        info(self, f"Listo. Copia de seguridad de lo borrado:\n{respaldo}{extra}\n\nEl programa se reiniciará.")
+        self._reiniciar_app(nueva)
 
     def _tab_actualizaciones(self) -> QWidget:
         import updater

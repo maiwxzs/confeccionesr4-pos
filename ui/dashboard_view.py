@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (QComboBox, QDateEdit, QGridLayout, QHBoxLayout, Q
                                QVBoxLayout, QWidget)
 
 import config as cfg
-import excel_engine as xe
 from database import rango_periodo
 from ui import theme
 from ui.animations import escalonado
@@ -314,5 +313,6 @@ class DashboardView(QWidget):
     def exportar(self) -> None:
         desde, hasta = self._rango()
         nombre = f"Reporte_Ventas_{desde[:10]}_a_{hasta[:10]}.xlsx"
+        import excel_engine as xe   # carga diferida: el Dashboard abre sin cargar openpyxl/numpy
         exportar_y_ofrecer_abrir(self, self.ctx, nombre,
                                  lambda ruta: xe.exportar_ventas(self.ctx.db, desde, hasta, ruta))

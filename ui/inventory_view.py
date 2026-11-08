@@ -26,6 +26,7 @@ import printer_engine as pe
 from database import POSError
 from ui import theme
 from ui.animations import DialogoAnimado
+from ui.seguridad import autorizar
 from ui.widgets import (AlignCenter, AlignRight, Contexto, MoneyEdit, boton, confirmar, en_segundo_plano,
                         error, etiqueta, exportar_y_ofrecer_abrir, info, pil_a_pixmap, tarjeta)
 
@@ -45,17 +46,19 @@ class InventarioModel(QAbstractTableModel):
     EDITABLES = {"codigo", "referencia", "nombre", "categoria", "costo", "precio", "stock", "talla", "color", "marca"}
     DINERO = {"costo", "precio", "valor"}
 
-    def __init__(self, ctx: Contexto, al_error):
+    def __init__(self, ctx: Contexto, al_error, al_confirmar=None):
         super().__init__()
         self.ctx = ctx
         self.filas: list[dict[str, Any]] = []
         self.critico = 3
         self.al_error = al_error
+        self.al_confirmar = al_confirmar or (lambda _m: True)
+        self.ver_inactivos = False
 
     def cargar(self) -> None:
         self.beginResetModel()
         self.critico = self.ctx.db.get_config_int("stock_critico", 3)
-        self.filas = [dict(r) for r in self.ctx.db.listar_productos()]
+        self.filas = [dict(r) for r in self.ctx.db.listar_productos(incluir_inactivos=self.ver_inactivos)]
         self.endResetModel()
 
     def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802
@@ -100,6 +103,17 @@ class InventarioModel(QAbstractTableModel):
             if clave == "stock":
                 return int(AlignCenter)
             return None
+        if not f.get("activo", 1):
+            if role == Qt.ItemDataRole.ForegroundRole:
+                return QColor(T["muted"])
+            if role == Qt.ItemDataRole.ToolTipRole:
+                return "Producto DESACTIVADO (no aparece en el punto de venta)"
+            if role == Qt.ItemDataRole.FontRole:
+                fnt = QFont()
+                fnt.setItalic(True)
+                return fnt
+            if role == Qt.ItemDataRole.BackgroundRole:
+                return None
         if role == Qt.ItemDataRole.BackgroundRole:
             if f["stock"] <= 0:
                 return QColor(T["crit_bg"])
@@ -140,6 +154,25 @@ class InventarioModel(QAbstractTableModel):
             if clave in ("codigo", "talla", "color", "marca"):
                 value = value.upper()
         if f[clave] == value:
+            return False
+        # Validaciones contra errores de digitación
+        if clave == "stock" and value < 0:
+            self.al_error("El stock no puede quedar negativo.")
+            return False
+        if clave == "stock" and value >= 500 and not self.al_confirmar(
+                f"¿Seguro que hay {value} unidades de «{f['nombre']}»?"):
+            return False
+        if clave == "precio":
+            if value <= 0 and not self.al_confirmar("¿Dejar el precio en $ 0? No se podrá vender."):
+                return False
+            if f["costo"] and 0 < value < f["costo"] and not self.al_confirmar(
+                    f"El precio ({cfg.cop(value)}) queda por DEBAJO del costo ({cfg.cop(f['costo'])}). ¿Continuar?"):
+                return False
+            if f["precio"] and value and (value > f["precio"] * 3 or value < f["precio"] / 3) and not self.al_confirmar(
+                    f"El precio cambia de {cfg.cop(f['precio'])} a {cfg.cop(value)}. ¿Es correcto?"):
+                return False
+        if clave == "costo" and f["precio"] and value > f["precio"] and not self.al_confirmar(
+                f"El costo ({cfg.cop(value)}) queda por ENCIMA del precio ({cfg.cop(f['precio'])}). ¿Continuar?"):
             return False
         try:
             self.ctx.db.actualizar_producto(f["id"], {clave: value})
@@ -587,14 +620,25 @@ class InventarioView(QWidget):
         self.b_plant = boton("Plantilla de Excel", "ghost")
         self.b_etq = boton("Etiquetas código de barras", "success")
         self.b_desact = boton("Desactivar", "danger")
+        self.b_eliminar = boton("Eliminar (creado por error)", "danger")
+        self.b_deshacer = boton("Deshacer última importación", "ghost")
+        self.b_reactivar = boton("Reactivar", "ghost")
+        self.chk_inactivos = QCheckBox("Ver desactivados")
         for b in (self.b_nuevo, self.b_import, self.b_export, self.b_formato, self.b_plant):
             acciones.addWidget(b)
         acciones.addStretch()
         acciones.addWidget(self.b_etq)
         acciones.addWidget(self.b_desact)
+        acciones.addWidget(self.b_eliminar)
+        raiz.addLayout(acciones)
+        acciones = QHBoxLayout()
+        acciones.addWidget(self.b_deshacer)
+        acciones.addStretch()
+        acciones.addWidget(self.chk_inactivos)
+        acciones.addWidget(self.b_reactivar)
         raiz.addLayout(acciones)
 
-        self.modelo = InventarioModel(ctx, lambda m: error(self, m))
+        self.modelo = InventarioModel(ctx, lambda m: error(self, m), lambda m: confirmar(self, m))
         self.proxy = FiltroProxy()
         self.proxy.setSourceModel(self.modelo)
         self.tabla = QTableView()
@@ -646,6 +690,10 @@ class InventarioView(QWidget):
         self.b_plant.clicked.connect(self.plantilla)
         self.b_etq.clicked.connect(self.etiquetas)
         self.b_desact.clicked.connect(self.desactivar)
+        self.b_eliminar.clicked.connect(self.eliminar)
+        self.b_deshacer.clicked.connect(self.deshacer_importacion)
+        self.b_reactivar.clicked.connect(self.reactivar)
+        self.chk_inactivos.toggled.connect(self._ver_inactivos)
         self.modelo.dataChanged.connect(lambda *_: self._cambio_propio())
         ctx.bus.productos_cambiados.connect(self._cambio_externo)
         ctx.bus.config_cambiada.connect(self._cambio_externo)
@@ -743,6 +791,61 @@ class InventarioView(QWidget):
             return
         for p in sel:
             self.ctx.db.desactivar_producto(p["id"])
+        self.ctx.bus.productos_cambiados.emit()
+
+    def _ver_inactivos(self, on: bool) -> None:
+        self.modelo.ver_inactivos = on
+        self.recargar()
+
+    def eliminar(self) -> None:
+        sel = self._seleccionados()
+        if not sel:
+            error(self, "Seleccione el producto creado por error.")
+            return
+        nombres = "\n".join(f"• {p['nombre']}" for p in sel[:10])
+        if not autorizar(self, self.ctx, f"Eliminar definitivamente {len(sel)} producto(s):\n{nombres}"):
+            return
+        borrados, con_ventas = 0, []
+        for p in sel:
+            try:
+                self.ctx.db.eliminar_producto(p["id"])
+                borrados += 1
+            except POSError:
+                con_ventas.append(p)
+        if con_ventas and confirmar(self, f"{len(con_ventas)} producto(s) ya tienen ventas y no se pueden borrar "
+                                          "(se perdería el historial).\n\n¿Desactivarlos en su lugar?"):
+            for p in con_ventas:
+                self.ctx.db.desactivar_producto(p["id"])
+        self.ctx.notificar(f"{borrados} producto(s) eliminados", "ok")
+        self.ctx.bus.productos_cambiados.emit()
+
+    def deshacer_importacion(self) -> None:
+        imp = self.ctx.db.ultima_importacion()
+        if imp is None or imp["deshecha"]:
+            error(self, "No hay ninguna importación para deshacer.")
+            return
+        if not autorizar(self, self.ctx, f"Deshacer la importación del {imp['fecha']} "
+                                         f"({imp['nuevos']} nuevos, {imp['actualizados']} actualizados). Los productos "
+                                         "vuelven a como estaban antes y se quitan los que se crearon."):
+            return
+        try:
+            self.ctx.db.respaldar()
+            r = self.ctx.db.deshacer_importacion()
+        except POSError as e:
+            error(self, str(e))
+            return
+        info(self, f"Importación deshecha.\n\nRestaurados: {r['restaurados']}\nEliminados: {r['eliminados']}\n"
+                   f"Desactivados (ya tenían ventas): {r['desactivados']}")
+        self.ctx.bus.productos_cambiados.emit()
+
+    def reactivar(self) -> None:
+        sel = [p for p in self._seleccionados() if not p.get("activo", 1)]
+        if not sel:
+            error(self, "Marque «Ver desactivados» y seleccione los productos a reactivar.")
+            return
+        for p in sel:
+            self.ctx.db.actualizar_producto(p["id"], {"activo": 1})
+        self.ctx.notificar(f"{len(sel)} producto(s) reactivados", "ok")
         self.ctx.bus.productos_cambiados.emit()
 
     def showEvent(self, e) -> None:  # noqa: N802

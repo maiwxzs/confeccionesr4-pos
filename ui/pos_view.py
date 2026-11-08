@@ -509,6 +509,10 @@ class POSView(QWidget):
     def agregar(self, p: dict[str, Any] | None) -> None:
         if not p:
             return
+        if int(p.get("precio") or 0) <= 0:
+            QApplication.beep()
+            self.ctx.notificar(f"«{p['nombre']}» no tiene precio. Asígnelo en Inventario antes de venderlo.", "warn")
+            return
         self.banner.hide()
         for it in self.carrito:
             if it["producto_id"] == p["id"]:
@@ -718,6 +722,17 @@ class POSView(QWidget):
             error(self, f"El monto recibido ({cfg.cop(recibido)}) es menor que el total ({cfg.cop(total)}).")
             self.recibido.setFocus()
             return
+        # Validaciones contra errores de digitación
+        if metodo == "Efectivo" and recibido and recibido > max(total * 5, total + 500_000):
+            if not confirmar(self, f"Monto recibido: {cfg.cop(recibido)} para un total de {cfg.cop(total)}.\n"
+                                   f"Vuelto: {cfg.cop(recibido - total)}\n\n¿Es correcto? (revise que no sobren ceros)"):
+                self.recibido.setFocus()
+                return
+        if subtotal and desc > subtotal * 0.30:
+            from ui.seguridad import autorizar
+            if not autorizar(self, self.ctx, f"Descuento de {cfg.cop(desc)} ({desc / subtotal * 100:.0f} % de la venta). "
+                                             "Los descuentos mayores al 30 % requieren autorización."):
+                return
         if not self._asegurar_caja():
             return
         items = [ItemCarrito(it["producto_id"], it["cantidad"], it["precio"]) for it in self.carrito]
