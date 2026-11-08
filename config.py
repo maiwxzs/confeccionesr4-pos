@@ -20,7 +20,7 @@ from pathlib import Path
 
 APP_NAME = "ConfeccionesR4 POS"
 APP_ID = "ConfeccionesR4"
-APP_VERSION = "1.0.0"            # la compilación automática (GitHub Actions) la reemplaza: 1.0.<n>
+APP_VERSION = "1.1.0"            # la compilación automática (GitHub Actions) la reemplaza: 1.1.<n>
 URL_ACTUALIZACIONES = ""         # idem: https://github.com/<usuario>/<repo>/releases/latest/download/latest.json
 DB_FILENAME = "confeccionesr4.db"
 
@@ -189,6 +189,15 @@ DEFAULT_CONFIG: dict[str, str] = {
     "buscar_actualizaciones": "1",
     "actualizar_automaticamente": "1", # instala sin preguntar al abrir / cuando no hay venta en curso
     "cajero_actual": "Cajero",
+    # v1.1
+    "imprimir_tiquete_defecto": "1",   # el botón «Imprimir tiquete» del POS empieza activado
+    "tiquete_nombre_cursiva": "1",     # nombre de la tienda en el tiquete con la misma cursiva de las etiquetas
+    "separado_dias_limite": "30",      # plazo para pagar un separado
+    "carpeta_respaldo_nube": "",       # p. ej. G:\\Mi unidad\\ConfeccionesR4 Respaldos (Google Drive para escritorio)
+    "ultimo_respaldo_nube": "",
+    "whatsapp_dueno": "",              # celular del dueño (10 dígitos) para el resumen del cierre
+    "telegram_token": "",              # opcional: envío automático por Telegram
+    "telegram_chat": "",
 }
 
 CATEGORIAS_BASE = ["Jeans Hombre", "Jeans Mujer", "Blusas", "Accesorios"]
@@ -205,7 +214,12 @@ def es_resolucion_de_prueba(conf: dict) -> bool:
     resol = str(conf.get("resolucion_dian", "")).strip()
     return (not resol or resol == RESOLUCION_PRUEBA_DIAN["resolucion_dian"]
             or str(conf.get("prefijo", "")).strip().upper() == RESOLUCION_PRUEBA_DIAN["prefijo"])
-METODOS_PAGO = ["Efectivo", "Nequi", "Daviplata", "Datáfono"]
+METODOS_PAGO = ["Efectivo", "Nequi", "Bre-B", "Datáfono"]
+# Etiquetas que pueden aparecer en tiquetes y cierres (Daviplata: ventas anteriores a la v1.1)
+METODOS_HISTORICOS = METODOS_PAGO + ["Mixto", "Cambio", "Separado", "Daviplata"]
+METODO_CREDITO = "Crédito cambio"     # crédito interno de un cambio de prenda (no es dinero)
+COLORES_METODO = {"Efectivo": "#22C55E", "Nequi": "#A855F7", "Bre-B": "#F97316", "Datáfono": "#3B82F6",
+                  "Daviplata": "#EF4444", "Separado": "#EAB308", "Mixto": "#14B8A6", "Cambio": "#64748B"}
 
 # Denominaciones COP en circulación para el arqueo
 DENOMINACIONES_COP = [100_000, 50_000, 20_000, 10_000, 5_000, 2_000, 1_000, 500, 200, 100, 50]

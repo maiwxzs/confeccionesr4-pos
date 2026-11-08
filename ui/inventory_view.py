@@ -655,6 +655,12 @@ class InventarioView(QWidget):
         acciones.addWidget(self.b_eliminar)
         raiz.addLayout(acciones)
         acciones = QHBoxLayout()
+        self.b_conteo = boton("Conteo físico (escáner)", "primary")
+        self.b_conteo.setToolTip("Contar la ropa con el lector y ajustar diferencias (queda registrado)")
+        self.b_reportes = boton("Reportes de gestión")
+        self.b_reportes.setToolTip("Mercancía quieta, ventas por talla/color/categoría, comparativo, sugerido de compra")
+        acciones.addWidget(self.b_conteo)
+        acciones.addWidget(self.b_reportes)
         acciones.addWidget(self.b_deshacer)
         acciones.addStretch()
         acciones.addWidget(self.chk_inactivos)
@@ -715,6 +721,8 @@ class InventarioView(QWidget):
         self.b_desact.clicked.connect(self.desactivar)
         self.b_eliminar.clicked.connect(self.eliminar)
         self.b_deshacer.clicked.connect(self.deshacer_importacion)
+        self.b_conteo.clicked.connect(self.conteo)
+        self.b_reportes.clicked.connect(self.reportes)
         self.b_reactivar.clicked.connect(self.reactivar)
         self.chk_inactivos.toggled.connect(self._ver_inactivos)
         self.modelo.dataChanged.connect(lambda *_: self._cambio_propio())
@@ -798,6 +806,14 @@ class InventarioView(QWidget):
         if ruta:
             xe.generar_plantilla_inventario(ruta)
             self.ctx.notificar("Plantilla guardada", "ok")
+
+    def conteo(self) -> None:
+        from ui.conteo_view import ConteoDialog
+        ConteoDialog(self.ctx, self).exec()
+
+    def reportes(self) -> None:
+        from ui.reportes_view import ReportesDialog
+        ReportesDialog(self.ctx, self).exec()
 
     def etiquetas(self) -> None:
         sel = self._seleccionados()

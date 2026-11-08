@@ -3,6 +3,8 @@ ui/settings_dialog.py — Configuración: datos fiscales/DIAN, impresoras, etiqu
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                                QPlainTextEdit, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
@@ -43,6 +45,7 @@ class ConfiguracionDialog(DialogoAnimado):
         tabs.addTab(desplazable(self._tab_operacion()), "Operación")
         tabs.addTab(desplazable(self._tab_seguridad()), "Seguridad")
         tabs.addTab(desplazable(self._tab_datos()), "Datos y respaldos")
+        tabs.addTab(desplazable(self._tab_nube()), "Nube y celular")
         tabs.addTab(desplazable(self._tab_actualizaciones()), "Actualizaciones")
         lay.addWidget(tabs, 1)
         fila = QHBoxLayout()
@@ -172,6 +175,8 @@ class ConfiguracionDialog(DialogoAnimado):
         b_carp.clicked.connect(lambda: abrir_archivo(str(cfg.tiquetes_dir(self._valores()))))
         fila_c.addWidget(b_carp)
         f.addRow("Carpeta de PDF", fila_c)
+        f.addRow("", self._check("tiquete_nombre_cursiva", "Nombre de la tienda en letra cursiva (la misma de las etiquetas)"))
+        f.addRow("", self._check("imprimir_tiquete_defecto", "Imprimir el tiquete al cobrar (se puede desmarcar en cada venta)"))
         # ---- Logo del tiquete
         f.addRow("", self._check("mostrar_logo_tiquete", "Imprimir el logo de la empresa arriba del tiquete"))
         self.logo_ruta = self._linea("logo_tiquete")
@@ -274,6 +279,7 @@ class ConfiguracionDialog(DialogoAnimado):
         w, f = _form()
         f.addRow("Cajero actual", self._linea("cajero_actual"))
         f.addRow("Stock crítico (≤)", self._spin("stock_critico", 0, 1000, " und"))
+        f.addRow("Plazo de los separados", self._spin("separado_dias_limite", 1, 180, " días"))
         f.addRow("", self._check("permitir_stock_negativo", "Permitir vender sin existencias (stock negativo)"))
         f.addRow("", self._check("arqueo_ciego", "Arqueo ciego: ocultar el efectivo esperado durante el turno"))
         return w
@@ -315,6 +321,95 @@ class ConfiguracionDialog(DialogoAnimado):
         f.addRow("Auditoría", aud)
         f.addRow("Versión", QLabel(f"{cfg.APP_NAME} {cfg.APP_VERSION}"))
         return w
+
+    def _tab_nube(self) -> QWidget:
+        w, f = _form()
+        f.addRow(etiqueta("Respaldo automático en Google Drive", titulo=True))
+        guia = etiqueta("1) Instale «Google Drive para escritorio» (gratis) e inicie sesión con la cuenta de la tienda.  "
+                        "2) Pulse «Detectar».  Desde ahí, después de cada cierre de caja y una vez al día, el programa "
+                        "guarda una copia de toda la información en Drive (se conservan las últimas 60).", muted=True)
+        guia.setWordWrap(True)
+        f.addRow(guia)
+        self.nube = self._linea("carpeta_respaldo_nube")
+        self.nube.setPlaceholderText("Sin configurar (por ejemplo G:\\Mi unidad\\ConfeccionesR4 Respaldos)")
+        fila = QHBoxLayout()
+        fila.addWidget(self.nube, 1)
+        b_det = boton("Detectar")
+        b_det.clicked.connect(self._detectar_drive)
+        b_eleg = boton("Elegir carpeta…", "ghost")
+        b_eleg.clicked.connect(self._elegir_nube)
+        fila.addWidget(b_det)
+        fila.addWidget(b_eleg)
+        f.addRow("Carpeta", fila)
+        fila2 = QHBoxLayout()
+        b_ya = boton("Respaldar ahora en la nube", "primary")
+        b_ya.clicked.connect(self._respaldar_nube)
+        fila2.addWidget(b_ya)
+        ultimo = self.c.get("ultimo_respaldo_nube") or "nunca"
+        self.lbl_nube = etiqueta(f"Último respaldo en la nube: {ultimo}", muted=True)
+        fila2.addWidget(self.lbl_nube)
+        fila2.addStretch()
+        f.addRow("", fila2)
+
+        f.addRow(etiqueta("Resumen del cierre al celular del dueño", titulo=True))
+        self.wa = self._linea("whatsapp_dueno")
+        self.wa.setPlaceholderText("Celular del dueño, p. ej. 3001234567")
+        f.addRow("WhatsApp", self.wa)
+        nota = etiqueta("Al cerrar la caja aparece «Enviar al celular (WhatsApp)»: abre WhatsApp con el resumen "
+                        "ya escrito y solo hay que pulsar Enviar.", muted=True)
+        nota.setWordWrap(True)
+        f.addRow("", nota)
+        f.addRow("Telegram: token del bot", self._linea("telegram_token"))
+        f.addRow("Telegram: chat", self._linea("telegram_chat"))
+        nota2 = etiqueta("Opcional y 100 % automático: con un bot de Telegram (se crea gratis con @BotFather) el "
+                         "resumen llega solo al celular apenas se cierra la caja, sin pulsar nada.", muted=True)
+        nota2.setWordWrap(True)
+        f.addRow("", nota2)
+        b_tg = boton("Probar envío por Telegram")
+        b_tg.clicked.connect(self._probar_telegram)
+        f.addRow("", b_tg)
+        return w
+
+    def _detectar_drive(self) -> None:
+        import nube
+        ruta = nube.detectar_drive()
+        if ruta is None:
+            error(self, "No encontré Google Drive en este computador.\n\nInstale «Google Drive para escritorio», "
+                        "inicie sesión y vuelva a pulsar «Detectar» (o elija la carpeta a mano).")
+            return
+        self.nube.setText(str(ruta))
+        self.ctx.notificar(f"Carpeta de respaldo: {ruta}", "ok")
+
+    def _elegir_nube(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        ruta = QFileDialog.getExistingDirectory(self, "Carpeta sincronizada (Google Drive / OneDrive)")
+        if ruta:
+            import nube
+            from pathlib import Path
+            p = Path(ruta)
+            self.nube.setText(str(p if p.name == nube.CARPETA else p / nube.CARPETA))
+
+    def _respaldar_nube(self) -> None:
+        import nube
+        self.ctx.db.set_config({"carpeta_respaldo_nube": self.nube.text().strip()})
+        db = self.ctx.db
+
+        def ok(ruta) -> None:
+            if ruta is None:
+                error(self, "Primero configure la carpeta (pulse «Detectar»).")
+                return
+            self.lbl_nube.setText(f"Último respaldo en la nube: {datetime.now():%Y-%m-%d %H:%M}")
+            info(self, f"Respaldo guardado:\n{ruta}\n\nGoogle Drive lo subirá en unos segundos.")
+        en_segundo_plano(lambda: nube.respaldar_en_nube(db, "manual"), ok,
+                         lambda m: error(self, f"No se pudo respaldar en la nube:\n{m}"))
+
+    def _probar_telegram(self) -> None:
+        import nube
+        token, chat = self.campos["telegram_token"].text().strip(), self.campos["telegram_chat"].text().strip()
+        en_segundo_plano(lambda: nube.enviar_telegram(token, chat, f"Prueba de {cfg.APP_NAME}: los resúmenes "
+                                                                    "de cierre llegarán a este chat."),
+                         lambda _: info(self, "Mensaje de prueba enviado. Revise Telegram."),
+                         lambda m: error(self, f"No se pudo enviar:\n{m}"))
 
     def _tab_seguridad(self) -> QWidget:
         w, f = _form()

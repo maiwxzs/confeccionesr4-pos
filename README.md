@@ -7,6 +7,20 @@ necesita Python, pip ni consola.
 
 ---
 
+## Novedades de la versión 1.1
+
+- **Pago mixto** (botón «Mixto»): parte en efectivo y parte por Nequi, Bre-B o datáfono, con cambio.
+- **Bre-B** reemplaza a Daviplata (las ventas antiguas con Daviplata se conservan en reportes y cierres).
+- **Cambio de prenda en un paso** (Documentos › Cambio de prenda): devuelve, se lleva otra y paga o recibe la diferencia.
+- **Separados con abonos** (Vender › SEPARAR o F7, y módulo Separados): reserva la ropa, abonos por cualquier medio, entrega y anulación con devolución parcial.
+- **Cajón monedero trazable**: cada apertura queda registrada (venta, devolución, abono, cambio o manual con motivo) y sale en el cierre.
+- **Conteo físico con escáner** (Inventario › Conteo físico): compara con el sistema y ajusta con motivo.
+- **Reportes de gestión**: mercancía quieta, ventas por categoría/talla/color/marca, comparativo mensual y sugerido de compra (en pantalla y a Excel).
+- **«Imprimir tiquete»** opcional al cobrar (la venta y su PDF se guardan igual).
+- **Respaldo automático en Google Drive** y **resumen del cierre al celular** (WhatsApp o Telegram) — Ajustes › Nube y celular.
+- Tiquete con el nombre de la tienda en la **misma letra cursiva** de las etiquetas.
+- Versión **1.1.x**: el número sale del archivo `VERSION` (1.1) más la cantidad de cambios publicados.
+
 ## 1. Estructura del proyecto
 
 ```

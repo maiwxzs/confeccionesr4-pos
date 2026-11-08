@@ -158,8 +158,10 @@ class ArqueoDialog(DialogoAnimado):
         conc = QGridLayout()
         conc.setHorizontalSpacing(10)
         self.declarados: dict[str, MoneyEdit] = {}
-        for j, (m, txt) in enumerate((("Datáfono", "Cierre del datáfono (débito/crédito)"),
-                                      ("Nequi", "Recibido en Nequi"), ("Daviplata", "Recibido en Daviplata"))):
+        textos = {"Datáfono": "Cierre del datáfono (débito/crédito)", "Nequi": "Recibido en Nequi",
+                  "Bre-B": "Recibido por Bre-B (llaves)"}
+        for j, (m, txt) in enumerate((m, textos.get(m, f"Recibido en {m}")) for m in cfg.METODOS_PAGO
+                                     if m != "Efectivo"):
             conc.addWidget(etiqueta(txt, muted=True), 0, j)
             me = MoneyEdit(grande=False, placeholder="No verificar")
             self.declarados[m] = me
@@ -257,22 +259,29 @@ class ResultadoCierreDialog(DialogoAnimado):
             ("Apertura", _fecha(cierre["fecha_apertura"])), ("Cierre", _fecha(cierre["fecha_cierre"])),
             ("Cajero", cierre.get("cajero") or "—"), ("N.º de ventas", str(cierre["num_ventas"])),
             ("", ""),
-            ("Efectivo", cfg.cop(cierre["por_metodo"]["Efectivo"]["total"])),
-            ("Nequi", cfg.cop(cierre["por_metodo"]["Nequi"]["total"])),
-            ("Daviplata", cfg.cop(cierre["por_metodo"]["Daviplata"]["total"])),
-            ("Datáfono", cfg.cop(cierre["por_metodo"]["Datáfono"]["total"])),
+            *[(f"{m} (neto)", cfg.cop(d.get("neto", d.get("total", 0))))
+              for m, d in cierre["por_metodo"].items() if m in cfg.METODOS_PAGO or d.get("neto") or d.get("total")],
             ("TOTAL VENTAS", cfg.cop(cierre["total_ventas"])),
             ("Devoluciones", cfg.cop(cierre["total_devoluciones"])),
+            *([("Abonos de separados", cfg.cop(cierre["total_abonos"]))] if cierre.get("total_abonos") else []),
             ("", ""),
             ("Base inicial", cfg.cop(cierre["base_inicial"])),
-            ("+ Ventas en efectivo", cfg.cop(cierre["total_efectivo"])),
+            ("+ Ventas en efectivo", cfg.cop(cierre["por_metodo"].get("Efectivo", {}).get("total", cierre["total_efectivo"]))),
             ("− Devoluciones en efectivo", cfg.cop(cierre["devoluciones_efectivo"])),
+            *([("+ Abonos en efectivo", cfg.cop(cierre["por_metodo"]["Efectivo"]["abonos"]))]
+              if cierre["por_metodo"].get("Efectivo", {}).get("abonos") else []),
+            *([("− Separados devueltos", cfg.cop(cierre["por_metodo"]["Efectivo"]["reembolsos"]))]
+              if cierre["por_metodo"].get("Efectivo", {}).get("reembolsos") else []),
             ("= Efectivo esperado", cfg.cop(cierre["efectivo_esperado"])),
             ("Efectivo contado", cfg.cop(cierre["efectivo_contado"])),
         ]
         if cierre.get("total_entradas") or cierre.get("total_salidas"):
             filas[-2:-2] = [("+ Entradas de efectivo", cfg.cop(cierre.get("total_entradas", 0))),
                             ("− Salidas (gastos / retiros)", cfg.cop(cierre.get("total_salidas", 0)))]
+        cajon = cierre.get("cajon") or {}
+        if cajon:
+            filas += [("", ""), ("Aperturas del cajón", str(sum(cajon.values()))),
+                      *[(f"   {o.title()}", str(n)) for o, n in sorted(cajon.items())]]
         for m, d in (cierre.get("conciliacion") or {}).items():
             filas += [("", ""), (f"{m}: sistema / reportado", f"{cfg.cop(d['sistema'])} / {cfg.cop(d['declarado'])}"),
                       (f"{m}: diferencia", "OK" if d["diferencia"] == 0 else cfg.cop(d["diferencia"]))]
@@ -295,15 +304,29 @@ class ResultadoCierreDialog(DialogoAnimado):
         exp.clicked.connect(lambda: exportar_y_ofrecer_abrir(
             self, ctx, f"Cierre_Caja_{cierre['id']}_{datetime.now():%Y%m%d}.xlsx",
             lambda ruta: xe.exportar_cierre_individual(ctx.db, cierre, ruta)))
+        wa = boton("Enviar al celular (WhatsApp)", "success", "lg")
+        wa.setToolTip("Abre WhatsApp con el resumen escrito para el número del dueño (Ajustes › Nube y celular)")
+        wa.clicked.connect(self.whatsapp)
         cerrar = boton("Cerrar", "primary", "lg")
         cerrar.clicked.connect(self.accept)
         fila.addWidget(imp)
         fila.addWidget(exp)
+        fila.addWidget(wa)
         fila.addStretch()
         fila.addWidget(cerrar)
         lay.addLayout(fila)
         if imprimir_auto:
             self.imprimir()
+
+    def whatsapp(self) -> None:
+        import nube
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        numero = self.ctx.db.get_config("whatsapp_dueno")
+        if len(nube.numero_whatsapp(numero)) < 11:
+            error(self, "Escriba el celular del dueño en Ajustes › Nube y celular.")
+            return
+        QDesktopServices.openUrl(QUrl(nube.url_whatsapp(numero, nube.texto_cierre(self.cierre, self.ctx.conf))))
 
     def imprimir(self) -> None:
         conf = self.ctx.conf
@@ -419,10 +442,8 @@ class CajaView(QWidget):
 
         grid = QGridLayout()
         grid.setSpacing(14)
-        self.kpi_metodo = {
-            "Efectivo": KpiCard("Efectivo", "#22C55E"), "Nequi": KpiCard("Nequi", "#A855F7"),
-            "Daviplata": KpiCard("Daviplata", "#EF4444"), "Datáfono": KpiCard("Datáfono / Tarjeta", "#3B82F6"),
-        }
+        self.kpi_metodo = {m: KpiCard("Datáfono / Tarjeta" if m == "Datáfono" else m,
+                                      cfg.COLORES_METODO.get(m, "#3B82F6")) for m in cfg.METODOS_PAGO}
         for i, k in enumerate(self.kpi_metodo.values()):
             grid.addWidget(k, 0, i)
         self.kpi_total = KpiCard("Ventas netas del turno", "#3B82F6")
@@ -453,6 +474,21 @@ class CajaView(QWidget):
         self.tabla_mov.setMaximumHeight(150)
         ml.addWidget(self.tabla_mov)
         lay.addWidget(movs)
+
+        caj = tarjeta()
+        cl = QVBoxLayout(caj)
+        cl.setContentsMargins(14, 10, 14, 10)
+        self.lbl_cajon = etiqueta("Aperturas del cajón en este turno", kpiTitulo=True)
+        cl.addWidget(self.lbl_cajon)
+        self.tabla_cajon = QTableWidget(0, 5)
+        self.tabla_cajon.setHorizontalHeaderLabels(["Hora", "Por", "Documento", "Motivo", "Cajero"])
+        self.tabla_cajon.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.tabla_cajon.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.tabla_cajon.verticalHeader().setVisible(False)
+        self.tabla_cajon.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tabla_cajon.setMaximumHeight(150)
+        cl.addWidget(self.tabla_cajon)
+        lay.addWidget(caj)
         return w
 
     # ------------------------------------------------------------------ datos
@@ -481,9 +517,18 @@ class CajaView(QWidget):
                     if m["anulado"]:
                         it.setForeground(QColor(theme.T["muted"]))
                     self.tabla_mov.setItem(i, j, it)
+            ap = db.aperturas_cajon(caja["id"])
+            self.lbl_cajon.setText(f"Aperturas del cajón en este turno: {len(ap)}"
+                                   + (f" (manuales: {sum(1 for a in ap if a['origen'] == 'MANUAL')})" if ap else ""))
+            self.tabla_cajon.setRowCount(len(ap))
+            for i, a in enumerate(reversed(ap)):
+                for j, v in enumerate([a["fecha"][11:16], a["origen"].title(), a["referencia"], a["motivo"], a["cajero"]]):
+                    self.tabla_cajon.setItem(i, j, QTableWidgetItem(v))
             for m, k in self.kpi_metodo.items():
                 dat = r["por_metodo"].get(m, {"cantidad": 0, "total": 0})
                 dev = f" · devuelto {cfg.cop(dat['devuelto'])}" if dat.get("devuelto") else ""
+                if dat.get("abonos"):
+                    dev += f" · abonos {cfg.cop(dat['abonos'])}"
                 if m == "Efectivo" and ciego:
                     k.set_valor("$ ••••••", f"{dat['cantidad']} ventas · oculto por arqueo ciego")
                 else:
@@ -535,8 +580,20 @@ class CajaView(QWidget):
             self.ctx.db.respaldar()  # copia de seguridad automática tras cada cierre
         except Exception:  # noqa: BLE001
             pass
+        import nube
+        db, cierre, conf = self.ctx.db, dlg.cierre, self.ctx.conf
+        if (db.get_config("carpeta_respaldo_nube") or "").strip():
+            en_segundo_plano(lambda: nube.respaldar_en_nube(db, "cierre"),
+                             lambda r: r and self.ctx.notificar("Respaldo guardado en Google Drive", "ok"),
+                             lambda m: self.ctx.notificar(f"No se pudo respaldar en la nube: {m}", "warn"))
+        if db.get_config("telegram_token") and db.get_config("telegram_chat"):
+            texto = nube.texto_cierre(cierre, conf)
+            en_segundo_plano(lambda: nube.enviar_telegram(db.get_config("telegram_token"),
+                                                          db.get_config("telegram_chat"), texto),
+                             lambda _: self.ctx.notificar("Resumen enviado al celular (Telegram)", "ok"),
+                             lambda m: self.ctx.notificar(f"No se pudo enviar el resumen: {m}", "warn"))
         self.ctx.bus.caja_cambiada.emit()
-        ResultadoCierreDialog(self.ctx, dlg.cierre, self).exec()
+        ResultadoCierreDialog(self.ctx, cierre, self).exec()
 
     def ver_cierre(self) -> None:
         fila = self.tabla.currentRow()
@@ -549,10 +606,9 @@ class CajaView(QWidget):
             ResultadoCierreDialog(self.ctx, cierre, self, imprimir_auto=False).exec()
 
     def abrir_cajon(self) -> None:
-        conf = self.ctx.conf
-        datos = pe.construir_apertura_cajon(conf).bytes()
-        en_segundo_plano(lambda: pe.enviar(datos, conf, titulo="Cajon"),
-                         al_fallar=lambda m: self.ctx.notificar(f"No se pudo abrir el cajón: {m}", "error"))
+        from ui.cajon import abrir_manual
+        abrir_manual(self, self.ctx)
+        self.refrescar()
 
     # ------------------------------------------------------------------ correcciones
     def movimiento(self, tipo: str) -> None:

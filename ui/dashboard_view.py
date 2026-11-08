@@ -28,7 +28,7 @@ try:
 except ImportError:  # pragma: no cover
     HAY_CHARTS = False
 
-COLORES_METODO = {"Efectivo": "#22C55E", "Nequi": "#A855F7", "Daviplata": "#EF4444", "Datáfono": "#3B82F6"}
+COLORES_METODO = cfg.COLORES_METODO
 PERIODOS = [("Hoy", "hoy"), ("Ayer", "ayer"), ("Últimos 7 días", "7d"), ("Últimos 30 días", "30d"),
             ("Este mes", "mes"), ("Este año", "anio"), ("Personalizado…", "custom")]
 
@@ -69,7 +69,11 @@ class DashboardView(QWidget):
         b_act.clicked.connect(self.refrescar)
         b_exp = boton("Exportación contable a Excel", "primary")
         b_exp.clicked.connect(self.exportar)
+        b_rep = boton("Reportes")
+        b_rep.setToolTip("Mercancía quieta, ventas por talla/color/categoría, comparativo mensual, sugerido de compra")
+        b_rep.clicked.connect(self._reportes)
         barra.addWidget(b_act)
+        barra.addWidget(b_rep)
         barra.addWidget(b_exp)
         raiz.addLayout(barra)
 
@@ -310,6 +314,10 @@ class DashboardView(QWidget):
         self._estilizar(chart)
 
     # ------------------------------------------------------------------ export
+    def _reportes(self) -> None:
+        from ui.reportes_view import ReportesDialog
+        ReportesDialog(self.ctx, self).exec()
+
     def exportar(self) -> None:
         desde, hasta = self._rango()
         nombre = f"Reporte_Ventas_{desde[:10]}_a_{hasta[:10]}.xlsx"

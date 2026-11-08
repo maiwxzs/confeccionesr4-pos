@@ -119,8 +119,22 @@ class DevolucionDialog(DialogoAnimado):
         self.lbl_total.setAlignment(AlignRight)
         fila_tot.addWidget(self.lbl_total, 1)
         lay.addLayout(fila_tot)
-        lay.addWidget(etiqueta(f"Se reintegra por {venta['metodo_pago']}. Las prendas vuelven al inventario y el "
-                               "valor se descuenta del arqueo de la caja abierta y de las métricas.", muted=True))
+        fila_re = QHBoxLayout()
+        fila_re.addWidget(etiqueta("Devolver el dinero por:"))
+        self.reintegro = QComboBox()
+        self.reintegro.addItems(cfg.METODOS_PAGO)
+        self.reintegro.setCurrentText(ctx.db.metodo_reintegro_sugerido(venta))
+        self.reintegro.setMinimumHeight(40)
+        fila_re.addWidget(self.reintegro)
+        fila_re.addStretch()
+        lay.addLayout(fila_re)
+        nota = etiqueta(f"Pagó con: {venta['metodo_pago']}"
+                        + (" (" + " + ".join(f"{m} {cfg.cop(v)}" for m, v in venta.get("pagos", [])) + ")"
+                           if len(venta.get("pagos", [])) > 1 else "")
+                        + ". Las prendas vuelven al inventario y el valor se descuenta del medio elegido en el "
+                          "arqueo de la caja abierta y de las métricas.", muted=True)
+        nota.setWordWrap(True)
+        lay.addWidget(nota)
 
         fila = QHBoxLayout()
         cancelar = boton("Cancelar", "ghost", "lg")
@@ -173,15 +187,16 @@ class DevolucionDialog(DialogoAnimado):
             return
         try:
             self.resultado = self.ctx.db.registrar_devolucion(
-                self.venta["numero_tiquete"], cant, motivo, self.ctx.db.get_config("cajero_actual"))
+                self.venta["numero_tiquete"], cant, motivo, self.ctx.db.get_config("cajero_actual"),
+                self.reintegro.currentText())
         except POSError as e:
             error(self, str(e))
             return
         conf = self.ctx.conf
-        abrir = self.venta["metodo_pago"] == "Efectivo" and conf.get("abrir_cajon_efectivo") == "1"
-        datos = pe.construir_devolucion(self.resultado, conf, motivo, abrir_cajon=abrir).bytes()
-        en_segundo_plano(lambda: pe.enviar(datos, conf, titulo="Devolucion"),
-                         al_fallar=lambda m: self.ctx.notificar(f"No se pudo imprimir: {m}", "error"))
+        from ui.cajon import despachar
+        dev = self.resultado["devolucion"]
+        despachar(self.ctx, pe.construir_devolucion(self.resultado, conf, motivo), "Devolucion", "DEVOLUCION",
+                  dev["numero"], abrir=dev.get("metodo") == "Efectivo")
         import ticket_pdf
         resultado = self.resultado
         en_segundo_plano(lambda: ticket_pdf.guardar_devolucion(resultado, conf),
@@ -222,7 +237,7 @@ class HistorialView(QWidget):
         self.cliente = QLineEdit()
         self.cliente.setPlaceholderText("Cédula o nombre del cliente")
         self.metodo = QComboBox()
-        self.metodo.addItems(["Todos"] + cfg.METODOS_PAGO)
+        self.metodo.addItems(["Todos"] + cfg.METODOS_HISTORICOS)
         self.estado = QComboBox()
         self.estado.addItems(ESTADOS)
         for w in (self.numero, self.cliente, self.metodo, self.estado):
@@ -315,6 +330,9 @@ class HistorialView(QWidget):
         botones.addWidget(self.btn_reimp, 1)
         botones.addWidget(self.btn_dev, 1)
         dl.addLayout(botones)
+        self.btn_cambio = boton("Cambio de prenda (devuelve una y se lleva otra)", "primary", "lg")
+        self.btn_cambio.clicked.connect(self.cambio)
+        dl.addWidget(self.btn_cambio)
         fila_extra = QHBoxLayout()
         self.btn_pdf = boton("Abrir PDF del tiquete", "ghost")
         self.btn_pdf.clicked.connect(self.abrir_pdf)
@@ -410,6 +428,7 @@ class HistorialView(QWidget):
         self.btn_pdf.setEnabled(on)
         self.btn_metodo.setEnabled(on and bool(self.venta) and not self.venta["total_devuelto"])
         self.btn_dev.setEnabled(on and bool(self.venta) and self.venta["estado"] != "ANULADO")
+        self.btn_cambio.setEnabled(on and bool(self.venta) and self.venta["estado"] != "ANULADO")
 
     def _limpiar_detalle(self) -> None:
         self.venta = None
@@ -447,7 +466,10 @@ class HistorialView(QWidget):
         if v["cliente_documento"]:
             cliente += f"  ·  C.C./NIT {v['cliente_documento']}"
         self.lbl_meta.setText(f"{_fecha(v['fecha'], True)}  ·  Cajero: {v['cajero'] or '—'}\n"
-                              f"Cliente: {cliente}  ·  Pago: {v['metodo_pago']}")
+                              f"Cliente: {cliente}  ·  Pago: {v['metodo_pago']}"
+                              + (" (" + " + ".join(f"{m} {cfg.cop(x)}" for m, x in v.get("pagos", [])) + ")"
+                                 if len(v.get("pagos", [])) > 1 else "")
+                              + (f"  ·  {v['separado']['numero']}" if v.get("separado") else ""))
         self.items.setRowCount(len(v["items"]))
         for i, it in enumerate(v["items"]):
             vals = [it["nombre"], str(it["cantidad"]), str(it["cantidad_devuelta"] or ""),
@@ -518,6 +540,24 @@ class HistorialView(QWidget):
             self.buscar()
             self.mostrar(self.venta["id"])
             destello(self.detalle, theme.T["danger"], 800, 16)
+
+    def cambio(self) -> None:
+        if not self.venta:
+            return
+        if not self.ctx.db.caja_abierta():
+            error(self, "Abra la caja antes de hacer un cambio.")
+            return
+        from ui.cambio_view import CambioDialog
+        dlg = CambioDialog(self.ctx, self.venta, self)
+        if dlg.exec() and dlg.resultado:
+            info = dlg.resultado["cambio_info"]
+            extra = (f" · pagó {cfg.cop(info['diferencia'])}" if info["diferencia"] > 0 else
+                     f" · se devolvió {cfg.cop(-info['diferencia'])}" if info["diferencia"] < 0 else "")
+            self.ctx.notificar(f"Cambio hecho · tiquete nuevo {dlg.resultado['numero_tiquete']}{extra}", "ok")
+            for s in (self.ctx.bus.ventas_cambiadas, self.ctx.bus.productos_cambiados, self.ctx.bus.caja_cambiada):
+                s.emit()
+            self.buscar()
+            self.mostrar(self.venta["id"])
 
     def abrir_pdf(self) -> None:
         """Abre la copia PDF del tiquete; si no existe (ventas antiguas) la genera en el momento."""

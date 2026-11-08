@@ -63,7 +63,10 @@ EXCLUIR = [
 OCULTOS = ["win32print", "win32ui", "win32con", "win32timezone", "PySide6.QtCharts",
            "openpyxl.cell._writer", "barcode", "barcode.writer", "escpos", "escpos.printer",
            "cryptography.hazmat.primitives.asymmetric.ed25519",
-           "cryptography.hazmat.primitives.serialization", "truststore", "certifi"]
+           "cryptography.hazmat.primitives.serialization", "truststore", "certifi",
+           # módulos propios que se cargan bajo demanda (v1.1)
+           "nube", "ticket_pdf", "ui.cajon", "ui.pagos", "ui.separados_view", "ui.cambio_view",
+           "ui.conteo_view", "ui.reportes_view", "ui.asistente", "ui.seguridad"]
 DLLS_VC = ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll",
            "msvcp140_2.dll", "concrt140.dll"]
 

@@ -32,6 +32,8 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+import json
+
 import config as cfg
 
 # =========================================================================== #
@@ -727,7 +729,17 @@ def exportar_auditoria(db, ruta: str | Path, limite: int = 20000) -> Path:
 
 def exportar_cierres(db, ruta: str | Path, limite: int = 500) -> Path:
     rep = ReporteExcel(_empresa(db))
-    filas = [dict(r) for r in db.historial_cierres(limite) if r["estado"] == "CERRADA"]
+    filas = []
+    for r in db.historial_cierres(limite):
+        if r["estado"] != "CERRADA":
+            continue
+        f = dict(r)
+        try:
+            pm = json.loads(f.get("por_metodo") or "{}")
+        except ValueError:
+            pm = {}
+        f["total_breb"] = pm.get("Bre-B", {}).get("neto", 0)
+        filas.append(f)
     rep.agregar_hoja(
         "Cierres", "Historial de Cierres de Caja",
         [Columna("N.º", "id", "entero"), Columna("Apertura", "fecha_apertura", "fecha"),
@@ -735,9 +747,12 @@ def exportar_cierres(db, ruta: str | Path, limite: int = 500) -> Path:
          Columna("Base", "base_inicial", "moneda", True), Columna("Ventas", "num_ventas", "entero", True),
          Columna("Total Ventas", "total_ventas", "moneda", True),
          Columna("Efectivo", "total_efectivo", "moneda", True), Columna("Nequi", "total_nequi", "moneda", True),
-         Columna("Daviplata", "total_daviplata", "moneda", True),
+         Columna("Bre-B", "total_breb", "moneda", True),
+         Columna("Daviplata (hasta v1.0)", "total_daviplata", "moneda", True),
          Columna("Datáfono", "total_datafono", "moneda", True),
          Columna("Devoluciones", "total_devoluciones", "moneda", True),
+         Columna("Abonos separados", "total_abonos", "moneda", True),
+         Columna("Aperturas cajón", "aperturas_cajon", "entero", True),
          Columna("Efectivo Esperado", "efectivo_esperado", "moneda", True),
          Columna("Efectivo Contado", "efectivo_contado", "moneda", True),
          Columna("Diferencia", "diferencia", "moneda", True), Columna("Resultado", "resultado"),
@@ -755,11 +770,11 @@ def exportar_cierre_individual(db, cierre: dict[str, Any], ruta: str | Path) -> 
         {"c": "Cajero", "v": cierre["cajero"], "_t": "texto"},
         {"c": "Número de ventas", "v": cierre["num_ventas"], "_t": "entero"},
         {"c": "Base inicial (fondo de sencillo)", "v": cierre["base_inicial"], "_t": "moneda"},
-        {"c": "Ventas en Efectivo", "v": cierre["total_efectivo"], "_t": "moneda"},
-        {"c": "Ventas Nequi", "v": cierre["total_nequi"], "_t": "moneda"},
-        {"c": "Ventas Daviplata", "v": cierre["total_daviplata"], "_t": "moneda"},
-        {"c": "Ventas Datáfono", "v": cierre["total_datafono"], "_t": "moneda"},
+        *[{"c": f"{m} (neto: ventas − devoluciones + abonos)", "v": d.get("neto", d.get("total", 0)), "_t": "moneda"}
+          for m, d in cierre["por_metodo"].items() if m in cfg.METODOS_PAGO or d.get("neto") or d.get("total")],
         {"c": "TOTAL VENTAS", "v": cierre["total_ventas"], "_t": "moneda"},
+        {"c": "Abonos de separados", "v": cierre.get("total_abonos", 0), "_t": "moneda"},
+        {"c": "Aperturas del cajón", "v": sum((cierre.get("cajon") or {}).values()), "_t": "entero"},
         {"c": "Devoluciones (total)", "v": cierre["total_devoluciones"], "_t": "moneda"},
         {"c": "Devoluciones en efectivo", "v": cierre["devoluciones_efectivo"], "_t": "moneda"},
         {"c": "Entradas de efectivo", "v": cierre.get("total_entradas", 0), "_t": "moneda"},
@@ -880,3 +895,61 @@ def generar_plantilla_inventario(ruta: str | Path) -> Path:
         ws.column_dimensions[get_column_letter(j)].width = max(len(t) + 4, 12)
     wb.save(ruta)
     return Path(ruta)
+
+
+# --------------------------------------------------------------------------- #
+# v1.1 · Reportes de gestión, conteo físico
+# --------------------------------------------------------------------------- #
+DIMENSIONES = {"categoria": "Categoría", "talla": "Talla", "color": "Color", "marca": "Marca"}
+
+
+def exportar_reportes(db, ruta: str | Path, desde: str, hasta: str, nombre_periodo: str = "",
+                      dias_quieta: int = 60, dias_analisis: int = 30, cobertura: int = 30, meses: int = 12) -> Path:
+    """Un libro con: mercancía quieta, ventas por categoría/talla/color/marca, comparativo y sugerido."""
+    rep = ReporteExcel(_empresa(db))
+    quieta = db.mercancia_quieta(dias_quieta)
+    rep.agregar_hoja(
+        "Mercancía quieta", f"Mercancía quieta (sin ventas hace {dias_quieta}+ días)",
+        [Columna("Código", "codigo"), Columna("Prenda", "nombre", ancho_max=50), Columna("Categoría", "categoria"),
+         Columna("Talla", "talla"), Columna("Color", "color"), Columna("Stock", "stock", "entero", True),
+         Columna("Precio", "precio", "moneda"), Columna("Valor a costo", "valor_costo", "moneda", True),
+         Columna("Valor a precio", "valor_venta", "moneda", True), Columna("Última venta", "ultima_venta"),
+         Columna("Días sin vender", "dias_sin_venta", "entero")],
+        quieta, subtitulo="Candidatas a promoción o liquidación")
+    for dim, nombre in DIMENSIONES.items():
+        filas = [dict(f, participacion=f["participacion"] / 100, margen=f["margen"] / 100)
+                 for f in db.ventas_por_dimension(dim, desde, hasta)]
+        rep.agregar_hoja(
+            f"Ventas por {nombre.lower()}", f"Ventas netas por {nombre.lower()}",
+            [Columna(nombre, "clave"), Columna("Unidades", "unidades", "entero", True),
+             Columna("Ventas netas", "ingresos", "moneda", True), Columna("Utilidad", "utilidad", "moneda", True),
+             Columna("Margen", "margen", "porcentaje"), Columna("Participación", "participacion", "porcentaje"),
+             Columna("Tiquetes", "tiquetes", "entero")],
+            filas, subtitulo=nombre_periodo)
+    comp = [dict(f, variacion=(f["variacion"] / 100) if f["variacion"] is not None else None)
+            for f in db.comparativo_mensual(meses)]
+    rep.agregar_hoja(
+        "Comparativo mensual", f"Comparativo de los últimos {meses} meses",
+        [Columna("Mes", "mes"), Columna("Tiquetes", "tiquetes", "entero", True),
+         Columna("Unidades", "unidades", "entero", True), Columna("Ventas netas", "ventas", "moneda", True),
+         Columna("Utilidad", "utilidad", "moneda", True), Columna("Tiquete promedio", "ticket_promedio", "moneda"),
+         Columna("Variación vs. mes anterior", "variacion", "porcentaje")], comp)
+    rep.agregar_hoja(
+        "Sugerido de compra", f"Sugerido de compra (ritmo de {dias_analisis} días · cubrir {cobertura} días)",
+        [Columna("Código", "codigo"), Columna("Prenda", "nombre", ancho_max=50), Columna("Categoría", "categoria"),
+         Columna("Talla", "talla"), Columna("Color", "color"), Columna("Vendidas", "vendidas", "entero", True),
+         Columna("Stock", "stock", "entero", True), Columna("Días de inventario", "dias_inventario"),
+         Columna("Pedir", "sugerido", "entero", True), Columna("Costo estimado", "costo_estimado", "moneda", True)],
+        db.sugerido_compra(dias_analisis, cobertura), subtitulo="Prendas que se agotan antes de la cobertura")
+    return rep.guardar(ruta)
+
+
+def exportar_conteo(db, filas: list[dict[str, Any]], ruta: str | Path, titulo: str = "Conteo físico") -> Path:
+    rep = ReporteExcel(_empresa(db))
+    rep.agregar_hoja(
+        "Conteo", titulo,
+        [Columna("Código", "codigo"), Columna("Prenda", "nombre", ancho_max=50), Columna("Categoría", "categoria"),
+         Columna("Sistema", "sistema", "entero", True), Columna("Contado", "contado", "entero", True),
+         Columna("Diferencia", "diferencia", "entero", True), Columna("Valor diferencia (costo)", "valor", "moneda", True)],
+        filas, subtitulo=datetime.now().strftime("%d/%m/%Y %H:%M"))
+    return rep.guardar(ruta)

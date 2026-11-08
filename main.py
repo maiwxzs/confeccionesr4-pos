@@ -10,7 +10,7 @@ Arranque:
      Dashboard · Vender · Documentos · Inventario · Caja   (+ Ajustes)
   6. Búsqueda silenciosa de actualizaciones firmadas (si hay internet y está configurada).
 
-Atajos globales: Ctrl+1..5 cambian de módulo.
+Atajos globales: Ctrl+1..6 cambian de módulo.
 """
 from __future__ import annotations
 
@@ -99,12 +99,13 @@ def cerrar_splash() -> None:
 # =========================================================================== #
 class VentanaPrincipal(QMainWindow):
     # Altura (px) por debajo de la cual cada pantalla deja de encogerse y aparece la barra para bajar
-    ALTO_MINIMO = {"dashboard": 760, "historial": 720, "inventario": 560, "caja": 820}
+    ALTO_MINIMO = {"dashboard": 760, "historial": 720, "inventario": 560, "caja": 900, "separados": 640}
 
     MODULOS = [
         ("Dashboard", "dashboard"),
         ("Vender", "pos"),
         ("Documentos", "historial"),
+        ("Separados", "separados"),
         ("Inventario", "inventario"),
         ("Caja", "caja"),
     ]
@@ -238,6 +239,9 @@ class VentanaPrincipal(QMainWindow):
         if clave == "caja":
             from ui.cash_view import CajaView
             return CajaView(self.ctx)
+        if clave == "separados":
+            from ui.separados_view import SeparadosView
+            return SeparadosView(self.ctx)
         from ui.dashboard_view import DashboardView
         return DashboardView(self.ctx)
 
@@ -314,7 +318,7 @@ class VentanaPrincipal(QMainWindow):
             if dlg.exec():
                 self._estado_caja()
                 if dlg.importar_al_final:
-                    self.ir_a(3)
+                    self.ir_a([c for _, c in self.MODULOS].index("inventario"))
                     self.vistas["inventario"].importar()
             return
         self._autodetectar_impresora()
@@ -349,6 +353,11 @@ class VentanaPrincipal(QMainWindow):
         viejo = not respaldos or (datetime.now().timestamp() - respaldos[-1].stat().st_mtime) > 20 * 3600
         if viejo:
             en_segundo_plano(self.ctx.db.respaldar, al_fallar=lambda m: log.warning("Respaldo diario: %s", m))
+        import nube
+        if nube.respaldo_nube_pendiente(self.ctx.db):
+            db = self.ctx.db
+            en_segundo_plano(lambda: nube.respaldar_en_nube(db, "diario"),
+                             al_fallar=lambda m: self.ctx.notificar(f"Respaldo en la nube pendiente: {m}", "warn"))
 
     def _asistente_primer_uso(self) -> None:
         caja = QMessageBox(self)
@@ -359,7 +368,7 @@ class VentanaPrincipal(QMainWindow):
         caja.addButton("Más tarde", QMessageBox.ButtonRole.RejectRole)
         caja.exec()
         if caja.clickedButton() is importar:
-            self.ir_a(3)
+            self.ir_a([c for _, c in self.MODULOS].index("inventario"))
             self.vistas["inventario"].importar()
 
     # ---------------------------------------------------------------- actualizaciones

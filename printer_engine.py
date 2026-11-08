@@ -18,6 +18,7 @@ from __future__ import annotations
 import socket
 import unicodedata
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import config as cfg
@@ -169,6 +170,7 @@ class EscPos:
     # ---------- hardware ----------
     def abrir_cajon(self) -> "EscPos":
         self.buf += ESC + b"p\x00\x19\xfa"   # Pin 2, pulso 50 ms / 500 ms
+        self.cajon = True
         return self
 
     def cortar(self) -> "EscPos":
@@ -363,9 +365,26 @@ def tiquete_de_muestra(conf: dict[str, str]):
     return ticket_pdf.guardar(tk, cfg.exports_dir() / "Vista_previa_tiquete.pdf")
 
 
+def _nombre_cursiva(p: EscPos, conf: dict[str, str]) -> bool:
+    """Nombre de la tienda con la misma letra cursiva de las etiquetas (imagen). False si no se pudo."""
+    if conf.get("tiquete_nombre_cursiva", "1") != "1" or not conf.get("razon_social"):
+        return False
+    try:
+        import barcode_engine as be
+        img = be.imagen_nombre_cursiva(conf["razon_social"], int(p.dots * 0.86),
+                                       conf.get("etiqueta_fuente", "Dancing Script"))
+    except Exception:  # noqa: BLE001 — sin la fuente: se imprime en letra normal
+        return False
+    p.alinear("centro").imagen(img)
+    return True
+
+
 def _cabecera(p: EscPos, conf: dict[str, str], resolucion: bool = True) -> None:
     _logo(p, conf)
-    p.alinear("centro").negrita(True).tamano(2, 2).texto(conf.get("razon_social", "")).tamano(1, 1)
+    if _nombre_cursiva(p, conf):
+        p.alinear("centro").negrita(True)
+    else:
+        p.alinear("centro").negrita(True).tamano(2, 2).texto(conf.get("razon_social", "")).tamano(1, 1)
     p.texto(f"NIT {conf.get('nit', '')}").negrita(False)
     p.envolver(conf.get("regimen", ""))
     p.envolver(conf.get("direccion", ""))
@@ -403,12 +422,49 @@ def _fecha_hora(iso: str) -> tuple[str, str]:
         return str(iso), ""
 
 
+def usa_efectivo(venta: dict[str, Any]) -> bool:
+    """True si en la operación entró o salió efectivo (para abrir el cajón)."""
+    pagos = venta.get("pagos") or [(venta.get("metodo_pago"), venta.get("total", 0))]
+    return any(m == "Efectivo" and v for m, v in pagos) or bool(venta.get("cambio"))
+
+
+def _bloque_pago(p: EscPos, venta: dict[str, Any]) -> None:
+    pagos = venta.get("pagos") or [(venta["metodo_pago"], venta["total"])]
+    reales = [(m, v) for m, v in pagos if m != cfg.METODO_CREDITO]
+    credito = sum(v for m, v in pagos if m == cfg.METODO_CREDITO)
+    info = venta.get("cambio_info") or {}
+    if venta["metodo_pago"] == "Separado":
+        sep = venta.get("separado") or {}
+        p.dos_columnas("Forma de pago:", "Separado")
+        p.dos_columnas(f"Abonado ({sep.get('numero', '')}):", cfg.cop(sep.get("abonado", venta["total"])))
+        return
+    if credito or venta["metodo_pago"] == "Cambio":
+        p.negrita(True).texto("CAMBIO DE PRENDA").negrita(False)
+        if info.get("original"):
+            p.dos_columnas("Tiquete original:", info["original"])
+        p.dos_columnas("Valor devuelto (crédito):", cfg.cop(info.get("credito", credito)))
+        for m, v in reales:
+            p.dos_columnas(f"Diferencia pagada ({m}):", cfg.cop(v))
+        if info.get("diferencia", 0) < 0:
+            p.negrita(True).dos_columnas(f"Se devolvió ({info.get('metodo_reintegro', '')}):",
+                                         cfg.cop(-info["diferencia"])).negrita(False)
+    elif len(reales) > 1:
+        p.dos_columnas("Forma de pago:", "Pago mixto")
+        for m, v in reales:
+            p.dos_columnas(f"  {m}", cfg.cop(v))
+    elif reales:
+        p.dos_columnas("Forma de pago:", reales[0][0])
+    efectivo = sum(v for m, v in reales if m == "Efectivo")
+    if efectivo:
+        p.dos_columnas("Efectivo recibido:", cfg.cop(efectivo + int(venta.get("cambio") or 0)))
+        p.negrita(True).dos_columnas("Cambio:", cfg.cop(venta.get("cambio") or 0)).negrita(False)
+
+
 def construir_tiquete(venta: dict[str, Any], conf: dict[str, str], reimpresion: bool = False,
                       abrir_cajon: bool | None = None) -> EscPos:
     p = _nuevo(conf)
     if abrir_cajon is None:
-        abrir_cajon = venta["metodo_pago"] == "Efectivo" and conf.get("abrir_cajon_efectivo") == "1" \
-            and not reimpresion
+        abrir_cajon = usa_efectivo(venta) and conf.get("abrir_cajon_efectivo") == "1" and not reimpresion
     if abrir_cajon:
         p.abrir_cajon()
     _cabecera(p, conf)
@@ -468,10 +524,7 @@ def construir_tiquete(venta: dict[str, Any], conf: dict[str, str], reimpresion: 
     else:   # montos grandes en 58 mm: letra alta pero de ancho normal, para que nunca se corte
         p.negrita(True).tamano(1, 2).dos_columnas("TOTAL A PAGAR", total_txt).tamano(1, 1).negrita(False)
     p.separador("=")
-    p.dos_columnas("Forma de pago:", venta["metodo_pago"])
-    if venta["metodo_pago"] == "Efectivo":
-        p.dos_columnas("Recibido:", cfg.cop(venta["monto_recibido"]))
-        p.negrita(True).dos_columnas("Cambio:", cfg.cop(venta["cambio"])).negrita(False)
+    _bloque_pago(p, venta)
     p.separador("-")
     p.alinear("centro")
     p.envolver("No responsable de IVA · Precios finales")
@@ -496,16 +549,25 @@ def construir_cierre(cierre: dict[str, Any], conf: dict[str, str]) -> EscPos:
     p.dos_columnas("Cajero:", cierre.get("cajero") or "-")
     p.dos_columnas("N.º ventas:", str(cierre["num_ventas"]))
     p.separador()
-    p.negrita(True).texto("INGRESOS POR MÉTODO").negrita(False)
-    for m in cfg.METODOS_PAGO:
-        p.dos_columnas(f"  {m}", cfg.cop(cierre["por_metodo"][m]["total"]))
+    pm = cierre["por_metodo"]
+    p.negrita(True).texto("DINERO RECIBIDO POR MÉTODO").negrita(False)
+    for m, d in pm.items():
+        if m in cfg.METODOS_PAGO or d.get("neto") or d.get("total"):
+            p.dos_columnas(f"  {m}", cfg.cop(d.get("neto", d.get("total", 0))))
     p.negrita(True).dos_columnas("TOTAL VENTAS", cfg.cop(cierre["total_ventas"])).negrita(False)
     p.dos_columnas("Devoluciones", "-" + cfg.cop(cierre["total_devoluciones"]))
+    if cierre.get("total_abonos"):
+        p.dos_columnas("Abonos de separados", cfg.cop(cierre["total_abonos"]))
     p.separador()
+    ef = pm.get("Efectivo", {})
     p.negrita(True).texto("ARQUEO DE EFECTIVO").negrita(False)
     p.dos_columnas("Base inicial", cfg.cop(cierre["base_inicial"]))
-    p.dos_columnas("+ Ventas efectivo", cfg.cop(cierre["total_efectivo"]))
-    p.dos_columnas("- Devol. efectivo", cfg.cop(cierre["devoluciones_efectivo"]))
+    p.dos_columnas("+ Ventas efectivo", cfg.cop(ef.get("total", cierre["total_efectivo"])))
+    p.dos_columnas("- Devol. efectivo", cfg.cop(ef.get("devuelto", cierre["devoluciones_efectivo"])))
+    if ef.get("abonos"):
+        p.dos_columnas("+ Abonos en efectivo", cfg.cop(ef["abonos"]))
+    if ef.get("reembolsos"):
+        p.dos_columnas("- Separados devueltos", cfg.cop(ef["reembolsos"]))
     if cierre.get("total_entradas"):
         p.dos_columnas("+ Entradas de efectivo", cfg.cop(cierre["total_entradas"]))
     if cierre.get("total_salidas"):
@@ -531,6 +593,12 @@ def construir_cierre(cierre: dict[str, Any], conf: dict[str, str]) -> EscPos:
             p.dos_columnas("  Sistema / Reportado", f"{cfg.cop(d['sistema'])} / {cfg.cop(d['declarado'])}")
             estado = "OK" if d["diferencia"] == 0 else cfg.cop(d["diferencia"])
             p.dos_columnas("  Diferencia", estado)
+        p.separador()
+    cajon = cierre.get("cajon") or {}
+    if cajon:
+        p.negrita(True).texto(f"APERTURAS DEL CAJÓN: {sum(cajon.values())}").negrita(False)
+        for origen, n in sorted(cajon.items()):
+            p.dos_columnas(f"  {origen.title()}", str(n))
         p.separador()
     if cierre.get("reaperturas"):
         p.texto(f"Caja reabierta {cierre['reaperturas']} vez/veces (ver auditoría)")
@@ -561,7 +629,7 @@ def construir_devolucion(venta: dict[str, Any], conf: dict[str, str], motivo: st
     p.dos_columnas("Tiquete original:", venta["numero_tiquete"])
     p.dos_columnas("Fecha venta:", _fecha_txt(venta["fecha"]))
     p.dos_columnas("Fecha devolución:", datetime.now().strftime("%d/%m/%Y %H:%M"))
-    p.dos_columnas("Reintegro por:", venta["metodo_pago"])
+    p.dos_columnas("Reintegro por:", dev.get("metodo") or venta["metodo_pago"])
     p.separador()
     for l in dev["lineas"]:
         p.envolver(l["nombre"])
@@ -574,6 +642,48 @@ def construir_devolucion(venta: dict[str, Any], conf: dict[str, str], motivo: st
         p.envolver(f"Motivo: {dev['motivo']}")
     p.avanzar(2).texto("Firma cliente: ___________________")
     p.avanzar(1).cortar()
+    return p
+
+
+def construir_separado(sep: dict[str, Any], conf: dict[str, str], titulo: str = "SEPARADO",
+                       abono: dict[str, Any] | None = None, abrir_cajon: bool = False) -> EscPos:
+    """Comprobante de separado / abono: prendas apartadas, abonado, saldo y fecha límite."""
+    p = _nuevo(conf)
+    if abrir_cajon:
+        p.abrir_cajon()
+    _cabecera(p, conf, resolucion=False)
+    p.alinear("centro").negrita(True).tamano(1, 2).texto(titulo).tamano(1, 1)
+    p.texto(sep["numero"]).negrita(False)
+    p.alinear("izq").separador("-")
+    p.dos_columnas("Fecha:", datetime.now().strftime("%d/%m/%Y %H:%M"))
+    p.envolver(f"Cliente: {sep['cliente_nombre']}")
+    p.texto(f"C.C./NIT: {sep['cliente_documento']}")
+    if sep.get("telefono"):
+        p.texto(f"Tel.: {sep['telefono']}")
+    p.separador("-")
+    for it in sep["items"]:
+        p.envolver(f"{it['cantidad']} {it['nombre']}")
+        p.dos_columnas(f"  {it['codigo']}", cfg.cop(it["precio_unitario"] * it["cantidad"]))
+    p.separador("-")
+    if sep.get("descuento"):
+        p.dos_columnas("Descuento", "-" + cfg.cop(sep["descuento"]))
+    p.negrita(True).dos_columnas("TOTAL", cfg.cop(sep["total"])).negrita(False)
+    if abono:
+        for m, v in abono.get("pagos", []):
+            p.dos_columnas(f"Abono de hoy ({m})", cfg.cop(v))
+    p.dos_columnas("Total abonado", cfg.cop(sep["abonado"]))
+    p.separador("=")
+    p.negrita(True).tamano(1, 2).dos_columnas("SALDO", cfg.cop(sep["total"] - sep["abonado"])).tamano(1, 1)
+    p.negrita(False).separador("=")
+    if sep.get("fecha_limite") and sep.get("estado", "ACTIVO") == "ACTIVO":
+        try:
+            limite = datetime.strptime(sep["fecha_limite"], "%Y-%m-%d").strftime("%d/%m/%Y")
+        except ValueError:
+            limite = sep["fecha_limite"]
+        p.envolver(f"Fecha límite para pagar y reclamar: {limite}")
+    p.alinear("centro").envolver("Conserve este comprobante: lo necesita para abonar y reclamar sus prendas.")
+    p.codigo_barras(sep["numero"], alto=50, ancho_modulo=2)
+    p.alinear("izq").avanzar(1).cortar()
     return p
 
 

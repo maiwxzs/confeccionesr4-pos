@@ -15,7 +15,7 @@ from typing import Any
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout,
-                               QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QScrollArea, QSizePolicy, QStyle, QStyledItemDelegate, QTableWidget, QVBoxLayout, QWidget)
+                               QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QScrollArea, QSizePolicy, QCheckBox, QStyle, QStyledItemDelegate, QTableWidget, QVBoxLayout, QWidget)
 
 import config as cfg
 import printer_engine as pe
@@ -279,6 +279,15 @@ class POSView(QWidget):
         cab = QHBoxLayout()
         cab.addWidget(etiqueta("Venta actual", titulo=True))
         cab.addStretch()
+        self.chk_imprimir = QCheckBox("Imprimir tiquete")
+        self.chk_imprimir.setToolTip("Desmárquelo si el cliente no quiere el tiquete: la venta y su PDF se guardan igual")
+        self.chk_imprimir.setChecked(self.ctx.db.get_config("imprimir_tiquete_defecto", "1") == "1")
+        self.chk_imprimir.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        cab.addWidget(self.chk_imprimir)
+        self.btn_cajon = boton("Cajón (F10)", "ghost", size="sm")
+        self.btn_cajon.setToolTip("Abrir el cajón sin venta (pide motivo y queda registrado)")
+        self.btn_cajon.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        cab.addWidget(self.btn_cajon)
         self.lbl_proximo = etiqueta("", muted=True)
         cab.addWidget(self.lbl_proximo)
         der.addLayout(cab)
@@ -351,8 +360,10 @@ class POSView(QWidget):
         metodos = QHBoxLayout()
         metodos.setSpacing(8)
         self.grupo_pago = QButtonGroup(self)
-        for m in cfg.METODOS_PAGO:
+        for m in cfg.METODOS_PAGO + ["Mixto"]:
             b = boton(m, pago=True)
+            if m == "Mixto":
+                b.setToolTip("Pago con varios medios (p. ej. parte en efectivo y parte por Nequi)")
             b.setCheckable(True)
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -412,7 +423,11 @@ class POSView(QWidget):
         self.btn_nueva.setMinimumWidth(130)
         self.btn_pagar = boton("PAGAR E IMPRIMIR   (F12)", "success", "xl")
         self.btn_pagar.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_separar = boton("SEPARAR\n(F7)", size="xl")
+        self.btn_separar.setToolTip("Apartar estas prendas para un cliente con un abono")
+        self.btn_separar.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         fila_cobro.addWidget(self.btn_nueva)
+        fila_cobro.addWidget(self.btn_separar)
         fila_cobro.addWidget(self.btn_pagar, 1)
         der.addLayout(fila_cobro)
 
@@ -458,6 +473,7 @@ class POSView(QWidget):
         self.tabla.setColumnWidth(1, 104 if compacto else 128)
         self.tabla.setColumnWidth(3, 60 if compacto else 72)
         self.btn_nueva.setText("NUEVA\n(F5)" if compacto else "NUEVA VENTA\n(F5)")
+        self.btn_separar.setMinimumWidth(90 if compacto else 120)
         self.btn_nueva.setMinimumWidth(90 if compacto else 130)
         self.btn_pagar.setText("COBRAR  (F12)" if compacto else "PAGAR E IMPRIMIR   (F12)")
         self._der_frame.setMinimumWidth(370 if compacto else 400)
@@ -485,11 +501,14 @@ class POSView(QWidget):
         self.grupo_pago.buttonClicked.connect(lambda _: self._al_cambiar_metodo())
         self.btn_pagar.clicked.connect(self.pagar)
         self.btn_nueva.clicked.connect(self.nueva_venta)
+        self.btn_separar.clicked.connect(self.separar)
+        self.btn_cajon.clicked.connect(self.abrir_cajon)
         self.cli_doc.editingFinished.connect(self._autocompletar_cliente)
         self._anim_tarjeta = None
 
         for tecla, fn in (("F2", self.enfocar_busqueda), ("F12", self.pagar), ("F5", self.nueva_venta),
-                          ("F9", self.reimprimir), ("F8", self.quitar_ultimo),
+                          ("F9", self.reimprimir), ("F8", self.quitar_ultimo), ("F7", self.separar),
+                          ("F10", self.abrir_cajon),
                           ("Escape", lambda: self.buscar.clear())):
             sc = QShortcut(QKeySequence(tecla), self)
             sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -834,18 +853,29 @@ class POSView(QWidget):
                 return
         if not self._asegurar_caja():
             return
+        pagos = None
+        if metodo == "Mixto":
+            from ui.pagos import pedir_pagos
+            pagos = pedir_pagos(self, "Pago mixto", total,
+                                texto="Escriba cuánto paga con cada medio. En efectivo, lo que entrega el cliente.")
+            if pagos is None:
+                return
         items = [ItemCarrito(it["producto_id"], it["cantidad"], it["precio"]) for it in self.carrito]
         try:
-            venta = self.ctx.db.registrar_venta(items, metodo, desc, recibido,
+            venta = self.ctx.db.registrar_venta(items, metodo if metodo != "Mixto" else "Efectivo", desc, recibido,
                                                 self.ctx.db.get_config("cajero_actual"),
-                                                self.cli_doc.text(), self.cli_nombre.text())
+                                                self.cli_doc.text(), self.cli_nombre.text(), pagos=pagos)
         except POSError as e:
             QApplication.beep()
             error(self, str(e))
             return
         self._imprimir_venta(venta)
         self._limpiar()
-        cambio = f" · CAMBIO {cfg.cop(venta['cambio'])}" if metodo == "Efectivo" else f" · {metodo}"
+        if venta["metodo_pago"] == "Mixto":
+            cambio = " · " + " + ".join(f"{m} {cfg.cop(v)}" for m, v in venta["pagos"]) + \
+                (f" · CAMBIO {cfg.cop(venta['cambio'])}" if venta["cambio"] else "")
+        else:
+            cambio = f" · CAMBIO {cfg.cop(venta['cambio'])}" if metodo == "Efectivo" else f" · {metodo}"
         self.banner.setText(f"Venta {venta['numero_tiquete']} por {cfg.cop(venta['total'])}{cambio}")
         self.banner.show()
         from ui.animations import aparecer
@@ -857,17 +887,42 @@ class POSView(QWidget):
             self.ctx.notificar(f"Quedan {restantes} números de la resolución DIAN. Gestione una nueva.", "warn")
 
     def _imprimir_venta(self, venta: dict, reimpresion: bool = False) -> None:
+        from ui.cajon import despachar
         conf = self.ctx.conf
-        tk = pe.construir_tiquete(venta, conf, reimpresion=reimpresion)
-        datos = tk.bytes()
-        en_segundo_plano(
-            lambda: pe.enviar(datos, conf, titulo=venta["numero_tiquete"]),
-            al_fallar=lambda m: self.ctx.notificar(
-                f"La venta quedó guardada, pero no se pudo imprimir:\n{m}", "error"))
+        abrir = not reimpresion and pe.usa_efectivo(venta)
+        tk = pe.construir_tiquete(venta, conf, reimpresion=reimpresion, abrir_cajon=False)
+        despachar(self.ctx, tk, venta["numero_tiquete"], "VENTA", venta["numero_tiquete"],
+                  imprimir=reimpresion or self.chk_imprimir.isChecked(), abrir=abrir)
         if not reimpresion:  # copia PDF del tiquete en Documentos\ConfeccionesR4 Tiquetes
             import ticket_pdf
             en_segundo_plano(lambda: ticket_pdf.guardar_venta(venta, conf),
                              al_fallar=lambda m: self.ctx.notificar(f"No se pudo guardar el PDF: {m}", "warn"))
+
+    def abrir_cajon(self) -> None:
+        if not self.isVisible():
+            return
+        from ui.cajon import abrir_manual
+        abrir_manual(self, self.ctx)
+
+    def separar(self) -> None:
+        """Aparta las prendas del carrito para un cliente, con abono inicial."""
+        if not self.isVisible() or not self.carrito:
+            if self.isVisible():
+                self.ctx.notificar("Agregue al carrito las prendas que el cliente quiere separar", "info")
+            return
+        if not self._asegurar_caja():
+            return
+        from ui.separados_view import NuevoSeparadoDialog
+        subtotal, desc, total = self._totales()
+        items = [ItemCarrito(it["producto_id"], it["cantidad"], it["precio"]) for it in self.carrito]
+        dlg = NuevoSeparadoDialog(self.ctx, items, total, desc, self.cli_doc.text(), self.cli_nombre.text(), self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.separado:
+            self._limpiar()
+            self.banner.setText(f"Separado {dlg.separado['numero']} · abonó {cfg.cop(dlg.separado['abonado'])}"
+                                f" · saldo {cfg.cop(dlg.separado['saldo'])}")
+            self.banner.show()
+            self.ctx.bus.productos_cambiados.emit()
+            self.ctx.bus.ventas_cambiadas.emit()
 
     def reimprimir(self) -> None:
         if not self.isVisible():

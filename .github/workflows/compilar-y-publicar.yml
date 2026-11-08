@@ -1,3 +1,14 @@
+# =============================================================================
+#  Compilación y publicación AUTOMÁTICA de ConfeccionesR4 POS
+#
+#  Cada cambio subido a la rama "main" (o el botón "Run workflow") hace, en un
+#  Windows de GitHub y sin intervención:
+#    1. Asigna la versión <VERSION>.<cambios desde que se editó VERSION> (1.1.0, 1.1.1…).
+#    2. Compila ConfeccionesR4.exe (un solo archivo) y el instalador Inno Setup.
+#    3. Firma la actualización con el secreto FIRMA_ACTUALIZACIONES.
+#    4. Publica un Release con: instalador, .exe y latest.json.
+#  Los POS instalados la detectan y se actualizan solos.
+# =============================================================================
 name: Compilar y publicar
 
 on:
@@ -23,12 +34,23 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     env:
-      VERSION: 1.0.${{ github.run_number }}
       URL_ACT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
       PYTHONIOENCODING: utf-8
     steps:
       - name: Descargar el código
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calcular la versión (archivo VERSION + número de cambios)
+        shell: bash
+        run: |
+          BASE=$(tr -d ' \r\n' < VERSION)
+          DESDE=$(git log -1 --format=%H -- VERSION)
+          N=$(git rev-list --count "$DESDE"..HEAD)
+          while git rev-parse -q --verify "refs/tags/v$BASE.$N" >/dev/null; do N=$((N+1)); done
+          echo "VERSION=$BASE.$N" >> "$GITHUB_ENV"
+          echo "Versión a publicar: $BASE.$N"
 
       - name: Python 3.12
         uses: actions/setup-python@v5

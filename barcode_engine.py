@@ -201,6 +201,29 @@ def fuente_cursiva(tamano: int, nombre: str = "Dancing Script"):
         return fuente(tamano, True)
 
 
+def nombre_para_cursiva(tienda: str) -> str:
+    """CONFECCIONESR4 -> ConfeccionesR4 (letra antes de número en mayúscula), igual que en las etiquetas."""
+    if tienda.isupper():
+        import re
+        return re.sub(r"([a-z])(?=\d)", lambda m: m.group(1).upper(), tienda[:1] + tienda[1:].lower())
+    return tienda
+
+
+def imagen_nombre_cursiva(tienda: str, ancho_px: int, fuente_nombre: str = "Dancing Script") -> Image.Image:
+    """Nombre de la tienda en cursiva, del ancho indicado (para el encabezado del tiquete)."""
+    texto = nombre_para_cursiva(tienda)
+    d = ImageDraw.Draw(Image.new("L", (1, 1)))
+    tam = 120
+    f = fuente_cursiva(tam, fuente_nombre)
+    while tam > 20 and _ancho_texto(d, texto, f) > ancho_px:
+        tam -= 2
+        f = fuente_cursiva(tam, fuente_nombre)
+    l, t, r, b = d.textbbox((0, 0), texto, font=f)
+    img = Image.new("L", (r - l + 8, b - t + 8), 255)
+    ImageDraw.Draw(img).text((4 - l, 4 - t), texto, font=f, fill=0)
+    return img
+
+
 def linea_producto(p: dict[str, Any]) -> str:
     """'BOGGY | JEANS DAMA | 8' (mismo formato de las etiquetas que ya usa la tienda)."""
     base = ""
