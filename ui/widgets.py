@@ -386,13 +386,14 @@ class Desplazable(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.alto_minimo = int(alto_minimo or 0)
-        self.setWidget(contenido)
+        self.contenido = contenido          # ANTES de setWidget: QScrollArea ya filtra eventos del contenido
+        self.setWidget(contenido)           # (setWidget instala el filtro de eventos de QScrollArea)
         self.verticalScrollBar().setSingleStep(30)
-        self.contenido = contenido
-        contenido.installEventFilter(self)
         self._ajustar()
 
     def _ajustar(self) -> None:
+        if getattr(self, "contenido", None) is None:
+            return
         # Un mínimo fijo REEMPLAZA al que calcula el diseño (Qt usa uno u otro): por eso se toma
         # siempre el mayor de los dos y se recalcula cuando el diseño cambia.
         lay = self.contenido.layout()
@@ -402,9 +403,9 @@ class Desplazable(QScrollArea):
             self.contenido.setMinimumHeight(objetivo)
 
     def eventFilter(self, obj, ev) -> bool:  # noqa: N802
-        if obj is self.contenido and ev.type() in (QEvent.Type.LayoutRequest, QEvent.Type.Show):
+        if obj is getattr(self, "contenido", None) and ev.type() in (QEvent.Type.LayoutRequest, QEvent.Type.Show):
             self._ajustar()
-        return False
+        return super().eventFilter(obj, ev)  # QScrollArea lo necesita para sus barras
 
     def resizeEvent(self, e) -> None:  # noqa: N802
         self._ajustar()

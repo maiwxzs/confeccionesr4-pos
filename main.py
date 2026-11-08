@@ -435,6 +435,29 @@ class VentanaPrincipal(QMainWindow):
 
 
 # =========================================================================== #
+def actualizacion_de_rescate(db) -> bool:
+    """
+    Red de seguridad: si una versión publicada no logra abrir la ventana, antes de mostrar el error
+    se busca una versión más nueva (corregida) y se instala sola. Así un error nunca deja la tienda
+    sin poder actualizar.
+    """
+    if not getattr(sys, "frozen", False) or not updater.clave_publica():
+        return False
+    try:
+        url = updater.url_efectiva(db.get_config("url_actualizaciones"))
+        info = updater.buscar(url) if url else None
+    except Exception:  # noqa: BLE001
+        log.exception("Actualización de rescate: no se pudo consultar")
+        return False
+    if info is None:
+        return False
+    log.info("Actualización de rescate a %s", info.version)
+    QMessageBox.information(None, cfg.APP_NAME, f"Se encontró una versión corregida ({info.version}).\n"
+                                                "Se instalará ahora y el programa se abrirá solo.")
+    updater.DialogoActualizacion(info, None).exec()
+    return True
+
+
 def main() -> int:
     configurar_logs()
     instalar_manejador_errores()
@@ -472,7 +495,15 @@ def main() -> int:
     ctx = Contexto(db, Bus())
     log.info("Inicio %s v%s · BD %s", cfg.APP_NAME, cfg.APP_VERSION, db.path)
 
-    ventana = VentanaPrincipal(ctx)
+    try:
+        ventana = VentanaPrincipal(ctx)
+    except Exception:  # noqa: BLE001
+        log.exception("La ventana principal no pudo abrirse")
+        cerrar_splash()
+        if actualizacion_de_rescate(db):
+            candado.unlock()           # el diálogo ya descargó, reemplazó el .exe y lanzó la versión nueva
+            return 0
+        raise
     cerrar_splash()
     ventana.showMaximized()
     codigo = app.exec()
