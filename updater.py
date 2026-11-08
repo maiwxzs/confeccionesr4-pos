@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -100,9 +101,49 @@ def verificar_firma(manifiesto: dict, pem: bytes | None = None) -> None:
         raise ErrorActualizacion("La firma de la actualización NO es válida. Se cancela por seguridad.") from e
 
 
+def _contextos_ssl():
+    """
+    Contextos TLS a probar, en orden. NUNCA se desactiva la verificación del certificado:
+      1. truststore: verifica con el almacén de certificados de WINDOWS (igual que el navegador;
+         Windows descarga solo los certificados raíz/intermedios que falten).
+      2. certifi: lista oficial de certificados de Mozilla empaquetada en el programa.
+      3. Contexto estándar de Python.
+    Así se evita el error CERTIFICATE_VERIFY_FAILED en equipos con certificados desactualizados
+    o con antivirus que inspeccionan HTTPS.
+    """
+    import ssl
+    try:
+        import truststore
+        yield "windows", truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import certifi
+        yield "certifi", ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001
+        pass
+    yield "python", ssl.create_default_context()
+
+
 def _abrir(url: str, timeout: int = 10):
+    import ssl
     req = urllib.request.Request(url, headers={"User-Agent": f"ConfeccionesR4-POS/{cfg.APP_VERSION}"})
-    return urllib.request.urlopen(req, timeout=timeout)  # noqa: S310 (URL configurada por el dueño)
+    ultimo: Exception | None = None
+    for _nombre, ctx in _contextos_ssl():
+        try:
+            return urllib.request.urlopen(req, timeout=timeout, context=ctx)  # noqa: S310
+        except urllib.error.URLError as e:
+            if isinstance(getattr(e, "reason", None), ssl.SSLError) or "CERTIFICATE" in str(e).upper():
+                ultimo = e
+                continue                         # probar con el siguiente almacén de certificados
+            raise
+        except ssl.SSLError as e:
+            ultimo = e
+            continue
+    raise ErrorActualizacion(
+        "No se pudo verificar el certificado de seguridad del servidor de actualizaciones.\n"
+        "Revise la fecha y hora de Windows, o si un antivirus está inspeccionando conexiones HTTPS.\n"
+        f"Detalle: {ultimo}")
 
 
 # --------------------------------------------------------------------------- #

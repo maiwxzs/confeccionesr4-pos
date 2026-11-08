@@ -63,7 +63,7 @@ EXCLUIR = [
 OCULTOS = ["win32print", "win32ui", "win32con", "win32timezone", "PySide6.QtCharts",
            "openpyxl.cell._writer", "barcode", "barcode.writer", "escpos", "escpos.printer",
            "cryptography.hazmat.primitives.asymmetric.ed25519",
-           "cryptography.hazmat.primitives.serialization"]
+           "cryptography.hazmat.primitives.serialization", "truststore", "certifi"]
 DLLS_VC = ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll",
            "msvcp140_2.dll", "concrt140.dll"]
 
@@ -81,7 +81,8 @@ def verificar_entorno(instalar: bool) -> None:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "-r",
                                str(RAIZ / "requirements.txt")])
     faltan = []
-    for mod in ("PySide6", "openpyxl", "PIL", "barcode", "PyInstaller", "pandas", "cryptography"):
+    for mod in ("PySide6", "openpyxl", "PIL", "barcode", "PyInstaller", "pandas", "cryptography", "truststore",
+                "certifi"):
         try:
             __import__(mod)
         except ImportError:
@@ -182,6 +183,7 @@ def ejecutar_pyinstaller(onefile: bool, version: Path) -> None:
         "--add-data", f"{RAIZ / 'assets'}{sep}assets",
         "--add-data", f"{TMP_DATA}{sep}data",
         "--collect-data", "barcode",          # fuentes internas de python-barcode
+        "--collect-data", "certifi",          # cacert.pem para HTTPS de las actualizaciones
         "--version-file", str(version),
         "--noupx",                            # UPX dispara falsos positivos de antivirus
     ]

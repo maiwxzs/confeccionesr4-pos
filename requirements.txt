@@ -10,4 +10,6 @@ python-barcode>=0.15        # Codificación EAN-13 / Code128
 python-escpos>=3.1          # (Opcional) transporte USB directo
 pywin32>=306; sys_platform == "win32"   # win32print / win32ui: impresión RAW y GDI
 cryptography>=42           # Firma Ed25519 de las actualizaciones remotas
+truststore>=0.9            # HTTPS verificado con los certificados de Windows
+certifi>=2024.2            # Certificados de Mozilla (respaldo)
 pyinstaller>=6.10           # Empaquetado (un solo .exe); >=6.9 trae PYINSTALLER_RESET_ENVIRONMENT
