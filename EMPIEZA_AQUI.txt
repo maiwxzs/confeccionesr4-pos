@@ -1,0 +1,31 @@
+CONFECCIONESR4 POS - PUESTA EN MARCHA AUTOMATICA (solo se hace UNA vez)
+=========================================================================
+
+Necesita: una cuenta de GitHub (gratis) y el archivo FIRMA_ACTUALIZACIONES.txt.
+No necesita instalar Python ni ningun programa en su computador.
+
+1. github.com -> "New repository"
+     Nombre: confeccionesr4-pos      Tipo: Public      -> Create repository
+
+2. En el repositorio: Settings -> Secrets and variables -> Actions
+     -> New repository secret
+     Name:   FIRMA_ACTUALIZACIONES
+     Secret: copie y pegue TODO el texto de FIRMA_ACTUALIZACIONES.txt -> Add secret
+
+3. Pestana "Code" -> "uploading an existing file"
+     Arrastre TODO lo que hay dentro de esta carpeta (incluida la carpeta .github)
+     -> Commit changes
+
+4. Pestana "Actions": espere a que "Compilar y publicar" termine en verde (10-15 min).
+
+5. Pestana "Releases": descargue Instalador_ConfeccionesR4_v1.0.exe
+     Instalelo en el computador de la tienda: Siguiente > Siguiente > Instalar > Finalizar.
+     (Si Windows avisa: "Mas informacion" -> "Ejecutar de todas formas")
+
+LISTO. Desde ahora todo es automatico:
+  - Cada cambio que se suba al repositorio se compila y publica solo.
+  - El POS de la tienda se actualiza solo al abrir (nunca durante una venta).
+  - Detecta la impresora, respalda la base de datos a diario y conserva todos los datos.
+
+Datos de la tienda: C:\ProgramData\ConfeccionesR4  (no se borran al actualizar)
+Guarde FIRMA_ACTUALIZACIONES.txt en un lugar seguro y no lo comparta.
