@@ -597,8 +597,10 @@ class EtiquetasDialog(DialogoAnimado):
                                 "etiqueta_estilo": self._estilo()[0], "etiqueta_fuente": self._estilo()[1]})
         img, n = self.img, self.copias.value()
         en_segundo_plano(lambda: pe.imprimir_etiquetas(img, n, conf),
-                         lambda _: self.ctx.notificar(f"{n} etiqueta(s) enviadas a la impresora", "ok"),
-                         lambda m: self.ctx.notificar(f"Error imprimiendo etiquetas: {m}", "error"))
+                         lambda total: self.ctx.notificar(
+                             f"{total} etiqueta(s) enviadas a la impresora"
+                             + (f" (filas completas del rollo; pidió {n})" if total and total != n else ""), "ok"),
+                         lambda m: error(self, m, "Error imprimiendo etiquetas"))
 
 
 # =========================================================================== #

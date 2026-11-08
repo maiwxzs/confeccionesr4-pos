@@ -625,7 +625,13 @@ def _imprimir_gdi(img, impresora: str, ancho_mm: float, alto_mm: float, copias: 
         dpi_x, dpi_y = dc.GetDeviceCaps(LOGPIXELSX), dc.GetDeviceCaps(LOGPIXELSY)
         w = int(ancho_mm / 25.4 * dpi_x)
         h = int(alto_mm / 25.4 * dpi_y)
-        w = min(w, dc.GetDeviceCaps(HORZRES))
+        pagina_mm = dc.GetDeviceCaps(HORZRES) / dpi_x * 25.4
+        if ancho_mm > pagina_mm + 2:         # nunca encoger: un código aplastado no se puede leer
+            raise PrinterError(
+                f"El papel configurado en el driver de «{nombre}» mide {pagina_mm:.0f} mm de ancho, pero la "
+                f"fila de etiquetas mide {ancho_mm:.0f} mm.\n\nAbra Windows › Impresoras › {nombre} › "
+                f"Preferencias de impresión y ponga un tamaño de {ancho_mm:.0f} × {alto_mm:.0f} mm (o el ancho "
+                "total del rollo).")
         dib = ImageWin.Dib(img.convert("RGB"))
         dc.StartDoc("Etiqueta ConfeccionesR4")
         for _ in range(max(1, copias)):
@@ -670,12 +676,54 @@ def etiqueta_de_prueba(conf: dict[str, str]):
     return img
 
 
-def imprimir_etiquetas(img, copias: int, conf: dict[str, str]) -> None:
+def _num(conf: dict[str, str], clave: str, defecto: float) -> float:
+    try:
+        return float(str(conf.get(clave, defecto)).replace(",", ".") or defecto)
+    except ValueError:
+        return defecto
+
+
+def columnas_etiquetas(conf: dict[str, str]) -> int:
+    return max(1, min(4, int(_num(conf, "etiqueta_columnas", 1))))
+
+
+def componer_fila(img, conf: dict[str, str]):
+    """Rollos de 2, 3 o 4 etiquetas por fila: repite la etiqueta en cada columna, con la separación
+    y el margen configurados. Devuelve (imagen de la fila completa, ancho total en mm)."""
+    from PIL import Image
+    cols = columnas_etiquetas(conf)
+    ancho = _num(conf, "etiqueta_ancho_mm", 50)
+    sep = _num(conf, "etiqueta_separacion_mm", 2)
+    margen = _num(conf, "etiqueta_margen_mm", 0)
+    total_mm = margen + cols * ancho + (cols - 1) * sep
+    if cols == 1 and not margen:
+        return img, ancho
+    px_mm = img.width / ancho
+    fila = Image.new("L", (round(total_mm * px_mm), img.height), 255)
+    for i in range(cols):
+        fila.paste(img.convert("L"), (round((margen + i * (ancho + sep)) * px_mm), 0))
+    return fila, total_mm
+
+
+def imprimir_etiquetas(img, copias: int, conf: dict[str, str]) -> int:
+    """Imprime `copias` etiquetas. En rollos de varias columnas se imprimen filas completas
+    (p. ej. 5 copias en rollo de 3 → 2 filas = 6 etiquetas). Devuelve cuántas etiquetas salieron."""
     modo = conf.get("modo_etiquetas", "windows")
     impresora = conf.get("impresora_etiquetas") or conf.get("impresora_tiquetes", "")
-    ancho = float(conf.get("etiqueta_ancho_mm", 50) or 50)
-    alto = float(conf.get("etiqueta_alto_mm", 30) or 30)
+    alto = _num(conf, "etiqueta_alto_mm", 30)
     copias = max(1, int(copias))
+    if modo != "escpos":
+        cols = columnas_etiquetas(conf)
+        img, ancho = componer_fila(img, conf)
+        filas = -(-copias // cols)
+        _imprimir_lote(img, filas, conf, modo, impresora, ancho, alto)
+        return filas * cols
+    _imprimir_lote(img, copias, conf, modo, impresora, _num(conf, "etiqueta_ancho_mm", 50), alto)
+    return copias
+
+
+def _imprimir_lote(img, copias: int, conf: dict[str, str], modo: str, impresora: str,
+                   ancho: float, alto: float) -> None:
     if modo == "tspl":
         enviar(_tspl(img, ancho, alto, copias), conf, impresora, "Etiquetas")
     elif modo == "escpos":

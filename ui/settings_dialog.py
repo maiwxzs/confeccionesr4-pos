@@ -240,6 +240,9 @@ class ConfiguracionDialog(DialogoAnimado):
         f.addRow("Impresora de etiquetas", fila_imp)
         f.addRow("Ancho etiqueta", self._spin("etiqueta_ancho_mm", 25, 104, " mm"))
         f.addRow("Alto etiqueta", self._spin("etiqueta_alto_mm", 15, 100, " mm"))
+        f.addRow("Etiquetas por fila", self._spin("etiqueta_columnas", 1, 4, " (columnas del rollo)"))
+        f.addRow("Separación entre etiquetas", self._spin("etiqueta_separacion_mm", 0, 10, " mm"))
+        f.addRow("Margen izquierdo", self._spin("etiqueta_margen_mm", 0, 20, " mm"))
         f.addRow("Simbología", self._combo("etiqueta_simbologia", [
             ("Automática (EAN-13 si el código es válido, si no Code128)", "auto"),
             ("Code128", "code128"), ("EAN-13", "ean13")]))
@@ -254,10 +257,10 @@ class ConfiguracionDialog(DialogoAnimado):
         fila_p.addWidget(b_prueba_et)
         fila_p.addStretch()
         f.addRow("", fila_p)
-        guia = etiqueta("Etiqueta de prueba: sale 1 sola, con un marco en el borde. Si el marco sale completo y "
-                        "centrado, el tamaño está bien. Si se corta o sale corrido, ajuste el ancho/alto aquí y en "
-                        "Windows › Impresoras › SAT TT460 › Preferencias de impresión (mismo tamaño), y calibre "
-                        "la impresora con el botón FEED.", muted=True)
+        guia = etiqueta("Prueba: sale UNA fila, con un marco en cada etiqueta. Si cada marco cae dentro de su "
+                        "etiqueta, quedó bien. Si se pasa a la de al lado, revise ancho, separación y etiquetas por "
+                        "fila. En Windows › Impresoras › SAT TT460 › Preferencias de impresión ponga como tamaño "
+                        "el ANCHO TOTAL del rollo y el alto de una etiqueta, y calibre con el botón FEED.", muted=True)
         guia.setWordWrap(True)
         f.addRow("", guia)
         nota = etiqueta("La cursiva solo se aplica al nombre de la tienda. Las barras y el código impreso "

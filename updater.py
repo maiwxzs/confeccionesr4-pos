@@ -197,25 +197,59 @@ def ejecutable_actual() -> Path:
     return Path(sys.executable)
 
 
-def aplicar(nuevo: Path) -> None:
-    """Reemplaza el .exe en uso y lanza la nueva versión. Quien llama debe cerrar la app."""
-    exe = ejecutable_actual()
+def _reintentar(accion, intentos: int = 24, espera: float = 0.5) -> None:
+    """Windows Defender/antivirus suele bloquear unos segundos el .exe recién descargado, y el
+    programa anterior puede tardar en soltar su archivo: se reintenta ~12 s antes de rendirse."""
+    for i in range(intentos):
+        try:
+            accion()
+            return
+        except PermissionError:
+            if i == intentos - 1:
+                raise
+            time.sleep(espera)
+
+
+def _nombre_viejo(exe: Path) -> Path:
     viejo = exe.with_name(exe.stem + ".old.exe")
     try:
         viejo.unlink(missing_ok=True)
-        os.replace(exe, viejo)               # Windows permite renombrar un .exe en ejecución
-        try:
-            os.replace(nuevo, exe)
-        except OSError:
-            import shutil
-            shutil.copy2(nuevo, exe)
-            nuevo.unlink(missing_ok=True)
+    except OSError:                          # sigue en uso: usar otro nombre (se borra al iniciar)
+        viejo = exe.with_name(f"{exe.stem}.old-{int(time.time())}.exe")
+    return viejo
+
+
+def aplicar(nuevo: Path) -> None:
+    """Reemplaza el .exe en uso y lanza la nueva versión. Quien llama debe cerrar la app.
+    Nunca deja el programa sin su .exe: ante cualquier fallo se restaura el anterior."""
+    exe = ejecutable_actual()
+    viejo = _nombre_viejo(exe)
+    renombrado = False
+    try:
+        _reintentar(lambda: os.replace(exe, viejo))   # Windows permite renombrar un .exe en ejecución
+        renombrado = True
+
+        def poner_nuevo():
+            try:
+                os.replace(nuevo, exe)
+            except PermissionError:
+                raise
+            except OSError:                  # otra unidad: copiar
+                import shutil
+                shutil.copy2(nuevo, exe)
+                nuevo.unlink(missing_ok=True)
+        _reintentar(poner_nuevo)
     except PermissionError:
+        if renombrado and not exe.exists():
+            try:
+                os.replace(viejo, exe)       # deshacer: el programa sigue intacto
+            except OSError:
+                pass
         _aplicar_como_administrador(nuevo, exe)
         return
     except OSError:
-        if viejo.exists() and not exe.exists():
-            os.replace(viejo, exe)           # deshacer
+        if renombrado and not exe.exists():
+            os.replace(viejo, exe)
         raise
     _lanzar(exe)
 
@@ -257,7 +291,11 @@ def _aplicar_como_administrador(nuevo: Path, exe: Path) -> None:
     args = f'--aplicar-actualizacion "{exe}" {os.getpid()}'
     r = ctypes.windll.shell32.ShellExecuteW(None, "runas", str(nuevo), args, None, 1)
     if r <= 32:
-        raise ErrorActualizacion("Se necesita permiso de administrador para actualizar.")
+        raise ErrorActualizacion(
+            "Windows no dejó reemplazar el programa y la ventana de permiso se canceló.\n\n"
+            "No se perdió nada: el programa sigue igual y lo volverá a intentar más tarde.\n"
+            "Para actualizar ya: cierre TODAS las ventanas de ConfeccionesR4, ábralo de nuevo y, si "
+            "Windows pregunta «¿Permitir que esta aplicación haga cambios?», pulse «Sí».")
 
 
 def modo_aplicar_desde_argv(argv: list[str]) -> bool:
@@ -266,16 +304,20 @@ def modo_aplicar_desde_argv(argv: list[str]) -> bool:
         return False
     i = argv.index("--aplicar-actualizacion")
     destino = Path(argv[i + 1])
-    viejo = destino.with_name(destino.stem + ".old.exe")
     for _ in range(60):                      # hasta 30 s esperando que el programa viejo cierre
         try:
-            viejo.unlink(missing_ok=True)
-            os.replace(destino, viejo)
+            if destino.exists():
+                os.replace(destino, _nombre_viejo(destino))
             break
         except OSError:
             time.sleep(0.5)
     import shutil
-    shutil.copy2(sys.executable, destino)
+    for _ in range(60):
+        try:
+            shutil.copy2(sys.executable, destino)
+            break
+        except OSError:
+            time.sleep(0.5)
     # Relanzar SIN privilegios de administrador (a través del Explorador) y con entorno limpio
     subprocess.Popen(["explorer.exe", str(destino)], env=entorno_limpio())
     return True
@@ -287,7 +329,7 @@ def limpiar_restos() -> None:
         exe = ejecutable_actual()
     except ErrorActualizacion:
         return
-    for p in (exe.with_name(exe.stem + ".old.exe"),):
+    for p in exe.parent.glob(f"{exe.stem}.old*.exe"):
         try:
             p.unlink(missing_ok=True)
         except OSError:

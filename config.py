@@ -172,6 +172,9 @@ DEFAULT_CONFIG: dict[str, str] = {
     "tamano_logo_tiquete": "50",       # % del ancho del papel
     "etiqueta_ancho_mm": "50",
     "etiqueta_alto_mm": "30",
+    "etiqueta_columnas": "1",         # etiquetas por fila del rollo (1, 2, 3 o 4)
+    "etiqueta_separacion_mm": "2",    # espacio entre una etiqueta y la de al lado
+    "etiqueta_margen_mm": "0",        # corrimiento desde el borde izquierdo del rollo
     "etiqueta_simbologia": "auto",     # auto (EAN-13 si es válido, si no Code128) | code128 | ean13
     "modo_etiquetas": "windows",       # windows (driver GDI, cualquier impresora) | escpos | tspl
     "etiqueta_mostrar_tienda": "1",
