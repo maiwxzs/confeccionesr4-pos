@@ -182,6 +182,10 @@ class DevolucionDialog(DialogoAnimado):
         datos = pe.construir_devolucion(self.resultado, conf, motivo, abrir_cajon=abrir).bytes()
         en_segundo_plano(lambda: pe.enviar(datos, conf, titulo="Devolucion"),
                          al_fallar=lambda m: self.ctx.notificar(f"No se pudo imprimir: {m}", "error"))
+        import ticket_pdf
+        resultado = self.resultado
+        en_segundo_plano(lambda: ticket_pdf.guardar_devolucion(resultado, conf),
+                         al_fallar=lambda m: self.ctx.notificar(f"No se pudo guardar el PDF: {m}", "warn"))
         self.accept()
 
 
@@ -310,9 +314,15 @@ class HistorialView(QWidget):
         botones.addWidget(self.btn_reimp, 1)
         botones.addWidget(self.btn_dev, 1)
         dl.addLayout(botones)
-        self.btn_metodo = boton("Corregir método de pago (ej. era débito, no efectivo)", "ghost")
+        fila_extra = QHBoxLayout()
+        self.btn_pdf = boton("Abrir PDF del tiquete", "ghost")
+        self.btn_pdf.clicked.connect(self.abrir_pdf)
+        self.btn_metodo = boton("Corregir método de pago", "ghost")
+        self.btn_metodo.setToolTip("Por ejemplo: se marcó efectivo pero pagó con débito")
         self.btn_metodo.clicked.connect(self.corregir_metodo)
-        dl.addWidget(self.btn_metodo)
+        fila_extra.addWidget(self.btn_pdf, 1)
+        fila_extra.addWidget(self.btn_metodo, 1)
+        dl.addLayout(fila_extra)
         split.addWidget(self.detalle)
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
@@ -396,6 +406,7 @@ class HistorialView(QWidget):
     # ------------------------------------------------------------------ detalle
     def _habilitar(self, on: bool) -> None:
         self.btn_reimp.setEnabled(on)
+        self.btn_pdf.setEnabled(on)
         self.btn_metodo.setEnabled(on and bool(self.venta) and not self.venta["total_devuelto"])
         self.btn_dev.setEnabled(on and bool(self.venta) and self.venta["estado"] != "ANULADO")
 
@@ -506,6 +517,20 @@ class HistorialView(QWidget):
             self.buscar()
             self.mostrar(self.venta["id"])
             destello(self.detalle, theme.T["danger"], 800, 16)
+
+    def abrir_pdf(self) -> None:
+        """Abre la copia PDF del tiquete; si no existe (ventas antiguas) la genera en el momento."""
+        if not self.venta:
+            return
+        import ticket_pdf
+        from ui.widgets import abrir_archivo
+        conf = dict(self.ctx.conf, guardar_pdf_tiquetes="1")
+        try:
+            ruta = ticket_pdf.ruta_existente(self.venta, conf) or ticket_pdf.guardar_venta(self.venta, conf)
+        except Exception as e:  # noqa: BLE001
+            error(self, f"No se pudo generar el PDF:\n{e}")
+            return
+        abrir_archivo(str(ruta))
 
     def corregir_metodo(self) -> None:
         if not self.venta:

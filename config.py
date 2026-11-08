@@ -118,6 +118,18 @@ def exports_dir() -> Path:
     return p
 
 
+def tiquetes_dir(conf: dict | None = None) -> Path:
+    """Carpeta de las copias PDF de los tiquetes (configurable en Ajustes)."""
+    personalizada = (conf or {}).get("carpeta_tiquetes", "").strip()
+    if personalizada:
+        p = Path(personalizada)
+    else:
+        docs = Path.home() / "Documents"
+        p = (docs if docs.exists() else Path.home()) / "ConfeccionesR4 Tiquetes"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def logs_dir() -> Path:
     p = data_dir() / "logs"
     p.mkdir(parents=True, exist_ok=True)
@@ -135,6 +147,8 @@ DEFAULT_CONFIG: dict[str, str] = {
     "direccion": "CRA 24 #26-45 BARRIO SALITRE LC-1",
     "ciudad": "Bogotá D.C.",
     "telefono": "3028694690",
+    "correo": "",                      # opcional, sale bajo el teléfono en el tiquete
+    "redes": "",                       # opcional, p. ej. «IG @confeccionesr4 · WhatsApp 302...»
     "resolucion_dian": "18760000001",
     "prefijo": "SETP",
     "rango_desde": "990000000",
@@ -149,13 +163,20 @@ DEFAULT_CONFIG: dict[str, str] = {
     "usb_product_id": "0x5743",
     "ancho_papel_mm": "80",            # 80 | 58
     "codepage": "cp850",               # cp850 (ESC t 2) recomendado para Jaltech
+    "guardar_pdf_tiquetes": "1",       # copia PDF de cada tiquete y comprobante
+    "carpeta_tiquetes": "",            # vacío = Documentos\\ConfeccionesR4 Tiquetes
     "abrir_cajon_efectivo": "0",       # 1 solo si hay cajón monedero conectado a la impresora (RJ11)
     "imprimir_codigo_barras_tiquete": "1",
+    "mostrar_logo_tiquete": "1",
+    "logo_tiquete": "",                # vacío = águila de ConfeccionesR4 incluida en el programa
+    "tamano_logo_tiquete": "50",       # % del ancho del papel
     "etiqueta_ancho_mm": "50",
     "etiqueta_alto_mm": "30",
     "etiqueta_simbologia": "auto",     # auto (EAN-13 si es válido, si no Code128) | code128 | ean13
     "modo_etiquetas": "windows",       # windows (driver GDI, cualquier impresora) | escpos | tspl
     "etiqueta_mostrar_tienda": "1",
+    "etiqueta_estilo": "cursiva",      # cursiva | normal (solo el nombre de la tienda)
+    "etiqueta_fuente": "Dancing Script",  # Dancing Script | Great Vibes | Allura
     # Operación
     "permitir_stock_negativo": "0",
     "stock_critico": "3",

@@ -15,7 +15,7 @@ from typing import Any
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QDialog, QFrame, QGridLayout,
-                               QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QSizePolicy, QStyle, QStyledItemDelegate, QTableWidget, QVBoxLayout, QWidget)
+                               QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListView, QScrollArea, QSizePolicy, QStyle, QStyledItemDelegate, QTableWidget, QVBoxLayout, QWidget)
 
 import config as cfg
 import printer_engine as pe
@@ -75,6 +75,11 @@ class TarjetaDelegate(QStyledItemDelegate):
 
         self.destello_fila = -1      # tarjeta recién tocada (animación de confirmación)
         self.destello_alfa = 0.0
+
+    def set_compacto(self, on: bool) -> None:
+        self.ANCHO, self.ALTO = (172, 112) if on else (192, 132)
+        self.f_nombre.setPointSize(9 if on else 10)
+        self.f_precio.setPointSize(13 if on else 15)
 
     def sizeHint(self, option, index) -> QSize:  # noqa: N802
         return QSize(self.ANCHO, self.ALTO)
@@ -163,6 +168,38 @@ class TarjetaDelegate(QStyledItemDelegate):
 # =========================================================================== #
 # Vista principal del POS
 # =========================================================================== #
+class _BarraDeslizable(QScrollArea):
+    """Fila de categorías que se desliza de lado (rueda del mouse o arrastrando la barra)
+    en lugar de aplastar los botones cuando no caben."""
+
+    def __init__(self, contenido: QWidget):
+        super().__init__()
+        self.setObjectName("transparente")
+        self.setWidget(contenido)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"
+                           "QScrollBar:horizontal { height: 6px; margin: 0; }")
+        self.ajustar_alto()
+
+    def ajustar_alto(self) -> None:
+        w = self.widget()
+        alto = w.sizeHint().height() if w is not None else 40
+        self.setFixedHeight(max(34, alto) + 8)
+
+    def wheelEvent(self, e) -> None:  # noqa: N802
+        barra = self.horizontalScrollBar()
+        if barra.maximum() > 0:
+            d = e.angleDelta().y() or e.angleDelta().x()
+            barra.setValue(barra.value() - d)
+            e.accept()
+        else:
+            super().wheelEvent(e)
+
+
 class POSView(QWidget):
     titulo = "Punto de Venta"
 
@@ -183,10 +220,13 @@ class POSView(QWidget):
         raiz = QHBoxLayout(self)
         raiz.setContentsMargins(16, 16, 16, 16)
         raiz.setSpacing(16)
+        self._raiz = raiz
+        self._compacto = None
 
         # ---------------- Izquierda (65 %) ----------------
         izq = QVBoxLayout()
         izq.setSpacing(12)
+        self._izq = izq
         fila_busq = QHBoxLayout()
         self.buscar = QLineEdit()
         self.buscar.setObjectName("search")
@@ -203,7 +243,8 @@ class POSView(QWidget):
         cont_cat.setObjectName("transparente")
         cont_cat.setLayout(self.barra_cat)
         self.barra_cat.setContentsMargins(0, 0, 0, 0)
-        izq.addWidget(cont_cat)
+        self.scroll_cat = _BarraDeslizable(cont_cat)
+        izq.addWidget(self.scroll_cat)
 
         self.modelo = ProductosModel()
         self.grilla = QListView()
@@ -233,6 +274,7 @@ class POSView(QWidget):
         der = QVBoxLayout(der_frame)
         der.setContentsMargins(14, 14, 14, 14)
         der.setSpacing(10)
+        self._der = der
 
         cab = QHBoxLayout()
         cab.addWidget(etiqueta("Venta actual", titulo=True))
@@ -273,12 +315,13 @@ class POSView(QWidget):
         self.tabla.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tabla.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tabla.setShowGrid(False)
-        self.tabla.setMinimumHeight(150)
+        self.tabla.setMinimumHeight(110)
         der.addWidget(self.tabla, 1)
 
         # Totales + descuento
         tot = QGridLayout()
         tot.setVerticalSpacing(4)
+        tot.setHorizontalSpacing(8)
         tot.addWidget(etiqueta("Subtotal", muted=True), 0, 0)
         self.lbl_subtotal = QLabel("$ 0")
         self.lbl_subtotal.setAlignment(AlignRight)
@@ -325,6 +368,7 @@ class POSView(QWidget):
         pe_lay = QVBoxLayout(self.panel_efectivo)
         pe_lay.setContentsMargins(0, 0, 0, 0)
         pe_lay.setSpacing(8)
+        self._pe_lay = pe_lay
         fila_rec = QHBoxLayout()
         col_rec = QVBoxLayout()
         col_rec.setSpacing(2)
@@ -374,6 +418,58 @@ class POSView(QWidget):
 
         raiz.addLayout(izq, 65)
         raiz.addWidget(der_frame, 35)
+        self._der_frame = der_frame
+        der_frame.setMinimumWidth(400)
+
+    # ------------------------------------------------------------ modo compacto
+    _QSS_COMPACTO = """
+        QPushButton[size="xl"] { font-size: 16px; min-height: 46px; border-radius: 12px; }
+        QPushButton[size="lg"] { font-size: 14px; min-height: 34px; border-radius: 10px; padding: 4px 8px; }
+        QPushButton[pago="true"] { min-height: 38px; font-size: 14px; padding: 4px 6px; }
+        QPushButton[chip="true"] { min-height: 30px; padding: 3px 14px; border-radius: 15px; }
+        QPushButton[size="sm"] { min-height: 28px; padding: 2px 8px; }
+        QPushButton[qty="true"] { min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px;
+                                  font-size: 17px; border-radius: 15px; }
+        QPushButton[del="true"] { min-height: 26px; max-height: 26px; padding: 0 6px; }
+        QLineEdit { padding: 5px 8px; }
+        QLineEdit#search { font-size: 16px; min-height: 38px; }
+        QLineEdit[money="true"] { font-size: 18px; min-height: 34px; }
+        QLabel#totalLabel { font-size: 28px; }
+        QLabel#cambioLabel { font-size: 24px; }
+        QLabel[titulo="true"] { font-size: 15px; }
+        QHeaderView::section { padding: 5px 6px; }
+    """
+
+    def _aplicar_compacto(self) -> None:
+        # Pantallas pequeñas (portátiles 1366×768, zoom de Windows 125 %): todo un poco más chico
+        compacto = self.height() < 820 or self.width() < 1250
+        if compacto == self._compacto:
+            return
+        self._compacto = compacto
+        self.setStyleSheet(self._QSS_COMPACTO if compacto else "")
+        m = 10 if compacto else 16
+        self._raiz.setContentsMargins(m, m, m, m)
+        self._raiz.setSpacing(10 if compacto else 16)
+        self._izq.setSpacing(8 if compacto else 12)
+        self._der.setContentsMargins(*([10] * 4 if compacto else [14] * 4))
+        self._der.setSpacing(6 if compacto else 10)
+        self._pe_lay.setSpacing(6 if compacto else 8)
+        self.tabla.verticalHeader().setDefaultSectionSize(46 if compacto else 58)
+        self.tabla.setColumnWidth(1, 104 if compacto else 128)
+        self.tabla.setColumnWidth(3, 60 if compacto else 72)
+        self.btn_nueva.setText("NUEVA\n(F5)" if compacto else "NUEVA VENTA\n(F5)")
+        self.btn_nueva.setMinimumWidth(90 if compacto else 130)
+        self.btn_pagar.setText("COBRAR  (F12)" if compacto else "PAGAR E IMPRIMIR   (F12)")
+        self._der_frame.setMinimumWidth(370 if compacto else 400)
+        self._delegado.set_compacto(compacto)
+        self.grilla.setGridSize(QSize(self._delegado.ANCHO + 4, self._delegado.ALTO + 4))
+        self.grilla.doItemsLayout()
+        self.scroll_cat.ajustar_alto()
+        self._render_carrito()
+
+    def resizeEvent(self, e) -> None:  # noqa: N802
+        super().resizeEvent(e)
+        self._aplicar_compacto()
 
     def _conectar(self) -> None:
         self._timer_busq = QTimer(self)
@@ -444,9 +540,12 @@ class POSView(QWidget):
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.setChecked(cat == self.categoria)
             b.clicked.connect(lambda _=False, c=cat: self._filtrar_categoria(c))
+            b.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             self.grupo_cat.addButton(b)
             self.barra_cat.addWidget(b)
         self.barra_cat.addStretch()
+        if hasattr(self, "scroll_cat"):
+            self.scroll_cat.ajustar_alto()
 
     def _filtrar_categoria(self, cat: str) -> None:
         self.categoria = cat
@@ -765,6 +864,10 @@ class POSView(QWidget):
             lambda: pe.enviar(datos, conf, titulo=venta["numero_tiquete"]),
             al_fallar=lambda m: self.ctx.notificar(
                 f"La venta quedó guardada, pero no se pudo imprimir:\n{m}", "error"))
+        if not reimpresion:  # copia PDF del tiquete en Documentos\ConfeccionesR4 Tiquetes
+            import ticket_pdf
+            en_segundo_plano(lambda: ticket_pdf.guardar_venta(venta, conf),
+                             al_fallar=lambda m: self.ctx.notificar(f"No se pudo guardar el PDF: {m}", "warn"))
 
     def reimprimir(self) -> None:
         if not self.isVisible():

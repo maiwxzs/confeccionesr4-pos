@@ -45,7 +45,10 @@ class EscPos:
         self.codepage = codepage if codepage in CODEPAGES else "cp850"
         self.buf = bytearray()
         self.preview: list[str] = []
+        self.lineas: list[dict] = []      # copia con formato, para generar el PDF del tiquete
         self._doble = False
+        self._alto = False
+        self._negrita = False
         self.buf += ESC + b"@"                                   # Inicializar
         self.buf += ESC + b"t" + bytes([CODEPAGES[self.codepage]])  # Tabla de caracteres
         self.buf += FS + b"."                                    # Cancelar modo Kanji (clones chinos)
@@ -75,12 +78,14 @@ class EscPos:
 
     def negrita(self, on: bool = True) -> "EscPos":
         self.buf += ESC + b"E" + (b"\x01" if on else b"\x00")
+        self._negrita = on
         return self
 
     def tamano(self, ancho: int = 1, alto: int = 1) -> "EscPos":
         n = ((max(1, min(ancho, 8)) - 1) << 4) | (max(1, min(alto, 8)) - 1)
         self.buf += GS + b"!" + bytes([n])
         self._doble = ancho > 1
+        self._alto = alto > 1
         return self
 
     def texto(self, txt: str = "", salto: bool = True) -> "EscPos":
@@ -93,6 +98,7 @@ class EscPos:
         if self._doble:  # simula el doble ancho en la vista previa
             linea = " ".join(linea[:w])
         self.preview.append(linea.rstrip()[: self.cols])
+        self.lineas.append({"t": txt, "b": self._negrita, "w": self._doble, "h": self._alto, "a": alin})
         return self
 
     def envolver(self, txt: str) -> "EscPos":
@@ -120,6 +126,7 @@ class EscPos:
     def avanzar(self, lineas: int = 1) -> "EscPos":
         self.buf += ESC + b"d" + bytes([max(0, min(lineas, 255))])
         self.preview += [""] * lineas
+        self.lineas += [{"t": "", "b": False, "w": False, "h": False, "a": "izq"}] * lineas
         return self
 
     # ---------- códigos ----------
@@ -133,6 +140,7 @@ class EscPos:
         self.buf += GS + b"k" + bytes([73, len(payload)]) + payload  # CODE128 (función B)
         self.buf += b"\n"
         self.preview.append(f"||| {datos} |||".center(self.cols))
+        self.lineas.append({"barcode": datos})
         return self
 
     def imagen(self, img, fragmento: int = 256) -> "EscPos":
@@ -154,6 +162,8 @@ class EscPos:
             self.buf += GS + b"v0\x00" + bytes([ancho_bytes & 0xFF, ancho_bytes >> 8, h & 0xFF, h >> 8])
             self.buf += trozo
         self.preview.append(f"[imagen {img.width}x{img.height}]".center(self.cols))
+        # Copia en blanco y negro (negro = 0) para el PDF del tiquete
+        self.lineas.append({"img": lienzo.point(lambda v: 0 if v < 160 else 255).convert("1")})
         return self
 
     # ---------- hardware ----------
@@ -262,14 +272,112 @@ def _nuevo(conf: dict[str, str]) -> EscPos:
     return EscPos(int(conf.get("ancho_papel_mm", 80) or 80), conf.get("codepage", "cp850"))
 
 
+LOGO_PREDETERMINADO = "logo_ticket.png"
+
+
+def ruta_logo(conf: dict[str, str]):
+    """Logo del tiquete: el que se cargó en Ajustes o, si no hay, el águila de ConfeccionesR4."""
+    from pathlib import Path
+    propio = str(conf.get("logo_tiquete") or "").strip()
+    if propio and Path(propio).is_file():
+        return Path(propio)
+    p = cfg.resource_path("assets", LOGO_PREDETERMINADO)
+    return p if p.is_file() else None
+
+
+def _logo(p: EscPos, conf: dict[str, str]) -> None:
+    if conf.get("mostrar_logo_tiquete", "1") != "1":
+        return
+    ruta = ruta_logo(conf)
+    if not ruta:
+        return
+    try:
+        from PIL import Image
+        im = Image.open(ruta)
+        im.load()
+    except Exception:  # noqa: BLE001 — un logo dañado nunca debe impedir imprimir la venta
+        return
+    try:
+        pct = max(25, min(90, int(conf.get("tamano_logo_tiquete", "50") or 50)))
+    except ValueError:
+        pct = 50
+    ancho = int(p.dots * pct / 100)
+    alto = max(1, int(im.height * ancho / im.width))
+    tope = int(p.dots * 0.75)                 # logos muy altos: limitar para no gastar papel
+    if alto > tope:
+        ancho, alto = max(1, int(ancho * tope / alto)), tope
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA")
+        fondo = Image.new("RGBA", im.size, (255, 255, 255, 255))
+        fondo.alpha_composite(im)
+        im = fondo
+    im = im.convert("L").resize((ancho, alto), Image.LANCZOS)
+    # Tramado (puntos) para que los grises y degradados del logo también salgan en papel térmico
+    im = im.convert("1").convert("L")
+    p.alinear("centro").imagen(im)
+
+
+def preparar_logo(origen) -> "Path":
+    """Copia el logo elegido a la carpeta de datos, en escala de grises, recortado y sin fondo
+    transparente. Devuelve la ruta para guardarla en la configuración."""
+    from pathlib import Path
+    from PIL import Image, ImageChops, ImageOps
+    im = Image.open(origen)
+    im.load()
+    im = im.convert("RGBA")
+    fondo = Image.new("RGBA", im.size, (255, 255, 255, 255))
+    fondo.alpha_composite(im)
+    gris = ImageOps.autocontrast(fondo.convert("L"), cutoff=1)
+    caja = ImageChops.invert(gris).point(lambda v: 255 if v > 24 else 0).getbbox()
+    if caja:
+        margen = 6
+        caja = (max(0, caja[0] - margen), max(0, caja[1] - margen),
+                min(gris.width, caja[2] + margen), min(gris.height, caja[3] + margen))
+        gris = gris.crop(caja)
+    if max(gris.size) > 1200:
+        gris.thumbnail((1200, 1200), Image.LANCZOS)
+    destino = Path(cfg.data_dir()) / "logo_tiquete.png"
+    tmp = destino.with_suffix(".tmp.png")
+    gris.save(tmp)
+    tmp.replace(destino)
+    return destino
+
+
+def tiquete_de_muestra(conf: dict[str, str]):
+    """PDF de ejemplo con el diseño actual (no gasta consecutivo ni papel)."""
+    import ticket_pdf
+    venta = {
+        "numero_tiquete": f"{conf.get('prefijo', 'SETP')}{conf.get('consecutivo_siguiente', '990000000')}",
+        "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "estado": "EMITIDO",
+        "cajero": conf.get("cajero_actual", "Cajero"), "cliente_nombre": "", "cliente_documento": "",
+        "metodo_pago": "Efectivo", "subtotal": 145000, "descuento": 5000, "total": 140000,
+        "monto_recibido": 150000, "cambio": 10000,
+        "items": [
+            {"codigo": "BG004", "referencia": "BG004", "nombre": "BOGGY JEANS DAMA TALLA 8",
+             "cantidad": 1, "precio_unitario": 85000, "subtotal": 85000},
+            {"codigo": "ST007", "referencia": "ST007", "nombre": "BLUSA STRAPLESS NEGRA",
+             "cantidad": 2, "precio_unitario": 30000, "subtotal": 60000},
+        ],
+    }
+    tk = construir_tiquete(venta, conf, abrir_cajon=False)
+    return ticket_pdf.guardar(tk, cfg.exports_dir() / "Vista_previa_tiquete.pdf")
+
+
 def _cabecera(p: EscPos, conf: dict[str, str], resolucion: bool = True) -> None:
+    _logo(p, conf)
     p.alinear("centro").negrita(True).tamano(2, 2).texto(conf.get("razon_social", "")).tamano(1, 1)
     p.texto(f"NIT {conf.get('nit', '')}").negrita(False)
     p.envolver(conf.get("regimen", ""))
     p.envolver(conf.get("direccion", ""))
-    p.texto(f"Tel. {conf.get('telefono', '')} - {conf.get('ciudad', '')}")
+    tel = conf.get("telefono", "")
+    ciudad = conf.get("ciudad", "")
+    p.envolver(" - ".join(x for x in (f"Tel. {tel}" if tel else "", ciudad) if x))
+    if conf.get("correo"):
+        p.envolver(conf["correo"])
+    if conf.get("redes"):
+        p.envolver(conf["redes"])
     if resolucion:
-        p.separador()
+        p.separador("=")
         if cfg.es_resolucion_de_prueba(conf):
             # Numeración pública del set de pruebas DIAN: no se presenta como autorización real
             p.envolver("COMPROBANTE INTERNO DE VENTA - No es factura ni documento equivalente electrónico")
@@ -277,7 +385,7 @@ def _cabecera(p: EscPos, conf: dict[str, str], resolucion: bool = True) -> None:
             p.envolver(f"Resolución DIAN No. {conf.get('resolucion_dian', '')}")
             p.envolver(f"Prefijo {conf.get('prefijo', '')} del {conf.get('rango_desde', '')} "
                        f"al {conf.get('rango_hasta', '')}")
-    p.alinear("izq").separador()
+    p.alinear("izq").separador("=")
 
 
 def _fecha_txt(iso: str) -> str:
@@ -285,6 +393,14 @@ def _fecha_txt(iso: str) -> str:
         return datetime.strptime(iso[:19], "%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y %H:%M")
     except (TypeError, ValueError):
         return str(iso)
+
+
+def _fecha_hora(iso: str) -> tuple[str, str]:
+    try:
+        f = datetime.strptime(iso[:19], "%Y-%m-%d %H:%M:%S")
+        return f.strftime("%d/%m/%Y"), f.strftime("%I:%M %p").lower().replace("am", "a.m.").replace("pm", "p.m.")
+    except (TypeError, ValueError):
+        return str(iso), ""
 
 
 def construir_tiquete(venta: dict[str, Any], conf: dict[str, str], reimpresion: bool = False,
@@ -298,47 +414,73 @@ def construir_tiquete(venta: dict[str, Any], conf: dict[str, str], reimpresion: 
     _cabecera(p, conf)
     titulo = "COMPROBANTE DE VENTA" if cfg.es_resolucion_de_prueba(conf) else "TIQUETE DE VENTA POS"
     p.alinear("centro").negrita(True).texto(titulo)
-    p.texto(venta["numero_tiquete"]).negrita(False)
+    p.tamano(1, 2).texto(f"N.º {venta['numero_tiquete']}").tamano(1, 1).negrita(False)
     if reimpresion:
         p.texto("*** COPIA / REIMPRESIÓN ***")
     if venta.get("estado") == "ANULADO":
         p.negrita(True).texto("*** TIQUETE ANULADO ***").negrita(False)
     elif venta.get("estado") == "DEVOLUCION PARCIAL":
         p.negrita(True).texto("*** CON DEVOLUCIÓN PARCIAL ***").negrita(False)
-    p.alinear("izq")
-    p.dos_columnas(f"Fecha: {_fecha_txt(venta['fecha'])}", "")
+    p.alinear("izq").separador("-")
+    fecha, hora = _fecha_hora(venta["fecha"])
+    p.dos_columnas(f"Fecha: {fecha}", (f"Hora: {hora}" if p.cols >= 48 else hora) if hora else "")
     if venta.get("cajero"):
         p.texto(f"Atendido por: {venta['cajero']}")
     if venta.get("cliente_nombre") or venta.get("cliente_documento"):
-        p.envolver(f"Cliente: {venta.get('cliente_nombre') or ''}"
-                   + (f" C.C./NIT {venta['cliente_documento']}" if venta.get("cliente_documento") else ""))
-    p.separador()
-    p.negrita(True).dos_columnas("DESCRIPCIÓN", "TOTAL").negrita(False)
+        p.envolver(f"Cliente: {venta.get('cliente_nombre') or ''}".rstrip())
+        if venta.get("cliente_documento"):
+            p.texto(f"C.C./NIT: {venta['cliente_documento']}")
+    p.separador("-")
+    # Tabla: CANT  DESCRIPCIÓN ................ VALOR
+    w_val = 11 if p.cols >= 48 else 10
+    w_cant = 5 if p.cols >= 48 else 4
+    w_desc = p.cols - w_cant - w_val
+    p.negrita(True).texto(("CANT" if p.cols >= 48 else "UND").ljust(w_cant) + "DESCRIPCIÓN".ljust(w_desc) + "VALOR".rjust(w_val))
+    p.negrita(False).separador("-")
     unidades = 0
     for it in venta["items"]:
         unidades += it["cantidad"]
-        p.envolver(it["nombre"])
-        izq = f"  {it['cantidad']} x {cfg.cop(it['precio_unitario'])}"
-        if p.cols >= 48:
-            izq += f"  {it.get('referencia') or it['codigo']}"
-        p.dos_columnas(izq, cfg.cop(it["subtotal"]))
-    p.separador()
-    p.dos_columnas("SUBTOTAL", cfg.cop(venta["subtotal"]))
+        palabras, lineas, actual = str(it["nombre"]).split(), [], ""
+        for pal in palabras:
+            if len(actual) + len(pal) + (1 if actual else 0) <= w_desc - 1:
+                actual = f"{actual} {pal}".strip()
+            else:
+                if actual:
+                    lineas.append(actual)
+                actual = pal[: w_desc - 1]
+        lineas.append(actual)
+        p.texto(str(it["cantidad"]).ljust(w_cant) + lineas[0].ljust(w_desc)
+                + cfg.cop(it["subtotal"]).rjust(w_val))
+        for extra in lineas[1:]:
+            p.texto(" " * w_cant + extra)
+        ref = it.get("referencia") or it["codigo"]
+        detalle = f"{ref}  ·  {cfg.cop(it['precio_unitario'])} c/u" if it["cantidad"] > 1 else f"{ref}"
+        p.texto(" " * w_cant + detalle[: w_desc + w_val])
+    p.separador("-")
+    p.dos_columnas(f"Artículos: {unidades}", "")
+    p.dos_columnas("Subtotal", cfg.cop(venta["subtotal"]))
     if venta["descuento"]:
-        p.dos_columnas("DESCUENTO", "-" + cfg.cop(venta["descuento"]))
-    p.negrita(True).tamano(2, 2).dos_columnas("TOTAL", cfg.cop(venta["total"])).tamano(1, 1).negrita(False)
-    p.separador()
-    p.dos_columnas("Medio de pago:", venta["metodo_pago"])
+        p.dos_columnas("Descuento", "-" + cfg.cop(venta["descuento"]))
+    p.separador("=")
+    total_txt = cfg.cop(venta["total"])
+    if len("TOTAL") + 1 + len(total_txt) <= p.cols // 2:
+        p.negrita(True).tamano(2, 2).dos_columnas("TOTAL", total_txt).tamano(1, 1).negrita(False)
+    else:   # montos grandes en 58 mm: letra alta pero de ancho normal, para que nunca se corte
+        p.negrita(True).tamano(1, 2).dos_columnas("TOTAL A PAGAR", total_txt).tamano(1, 1).negrita(False)
+    p.separador("=")
+    p.dos_columnas("Forma de pago:", venta["metodo_pago"])
     if venta["metodo_pago"] == "Efectivo":
         p.dos_columnas("Recibido:", cfg.cop(venta["monto_recibido"]))
-        p.negrita(True).dos_columnas("CAMBIO:", cfg.cop(venta["cambio"])).negrita(False)
-    p.dos_columnas("Artículos:", str(unidades))
-    p.separador()
+        p.negrita(True).dos_columnas("Cambio:", cfg.cop(venta["cambio"])).negrita(False)
+    p.separador("-")
     p.alinear("centro")
-    p.envolver("No Responsable de IVA - Precios finales")
+    p.envolver("No responsable de IVA · Precios finales")
     if conf.get("imprimir_codigo_barras_tiquete", "1") == "1":
+        p.avanzar(1)
         p.codigo_barras(venta["numero_tiquete"], alto=50, ancho_modulo=2)
-    p.envolver(conf.get("mensaje_pie", ""))
+    if conf.get("mensaje_pie"):
+        p.avanzar(1)
+        p.negrita(True).envolver(conf["mensaje_pie"]).negrita(False)
     p.texto(f"{cfg.APP_NAME} v{cfg.APP_VERSION}")
     p.alinear("izq").avanzar(1).cortar()
     return p

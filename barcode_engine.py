@@ -178,12 +178,62 @@ def _partir_en_lineas(draw, txt: str, f, ancho_max: int, max_lineas: int = 2) ->
 # --------------------------------------------------------------------------- #
 # Etiqueta
 # --------------------------------------------------------------------------- #
+# Letras cursivas incluidas en el programa (licencia SIL Open Font License, ver assets/fonts/OFL_*.txt)
+FUENTES_CURSIVAS = {
+    "Dancing Script": ("assets/fonts/DancingScript.ttf", "Bold"),   # trazo grueso: la más legible en térmica
+    "Great Vibes": ("assets/fonts/GreatVibes-Regular.ttf", None),    # caligráfica elegante
+    "Allura": ("assets/fonts/Allura-Regular.ttf", None),
+}
+
+
+@lru_cache(maxsize=32)
+def fuente_cursiva(tamano: int, nombre: str = "Dancing Script"):
+    ruta, variante = FUENTES_CURSIVAS.get(nombre, FUENTES_CURSIVAS["Dancing Script"])
+    try:
+        f = ImageFont.truetype(str(cfg.resource_path(ruta)), tamano)
+        if variante:
+            try:
+                f.set_variation_by_name(variante)
+            except Exception:  # noqa: BLE001  (Pillow sin soporte de fuentes variables)
+                pass
+        return f
+    except OSError:
+        return fuente(tamano, True)
+
+
+def linea_producto(p: dict[str, Any]) -> str:
+    """'BOGGY | JEANS DAMA | 8' (mismo formato de las etiquetas que ya usa la tienda)."""
+    base = ""
+    try:
+        import json
+        origen = json.loads(p.get("datos_origen") or "{}")
+        for k, v in origen.items():
+            if k.strip().lower() == "nombre" and v:
+                base = str(v)
+                break
+    except (ValueError, TypeError):
+        pass
+    base = base or str(p.get("nombre", "")).split(" · ")[0]
+    partes = [base.strip(), str(p.get("categoria") or "").strip()]
+    talla = str(p.get("talla") or "").strip()
+    if talla:
+        partes.append(talla)
+    return " | ".join(x for x in partes if x).upper()
+
+
 def generar_etiqueta(producto: dict[str, Any] | Any, ancho_mm: float = 50, alto_mm: float = 30,
                      simbologia: str = "auto", tienda: str = "CONFECCIONESR4",
-                     mostrar_tienda: bool = True) -> Image.Image:
+                     mostrar_tienda: bool = True, estilo: str = "cursiva",
+                     fuente_tienda: str = "Dancing Script") -> Image.Image:
     """
-    Devuelve una imagen 1-bit (modo '1') lista para imprimir a 203 dpi:
-    [tienda] / nombre del producto / código de barras / código legible / PRECIO.
+    Etiqueta 1-bit a 203 dpi (la resolución de las impresoras de etiquetas):
+        ConfeccionesR4            <- nombre de la tienda en letra cursiva (o normal)
+        BOGGY | JEANS DAMA | 8    <- prenda | categoría | talla
+        ||||||||||||||||||        <- código de barras (Code128 / EAN-13), barras nítidas
+        BG004                     <- código legible
+        $ 120.000                 <- precio
+    El código de barras es el mismo «Código Interno» del inventario: las etiquetas ya pegadas
+    en la mercancía siguen funcionando.
     """
     p = dict(producto)
     codigo = str(p["codigo"]).strip()
@@ -193,52 +243,63 @@ def generar_etiqueta(producto: dict[str, Any] | Any, ancho_mm: float = 50, alto_
     img = Image.new("L", (W, H), 255)
     d = ImageDraw.Draw(img)
     util = W - 2 * margen
-    y = margen // 2
+    y = max(4, margen // 3)
 
-    # 1. Tienda
+    # 1. Tienda (cursiva)
     if mostrar_tienda and tienda:
-        f = fuente(max(14, H // 14), True)
-        d.text(((W - _ancho_texto(d, tienda, f)) // 2, y), tienda, font=f, fill=0)
-        y += _alto_texto(d, tienda, f) + 4
+        if estilo == "cursiva":
+            nombre_tienda = tienda
+            if tienda.isupper():  # CONFECCIONESR4 -> ConfeccionesR4 (letra antes de número en mayúscula)
+                import re
+                nombre_tienda = re.sub(r"([a-z])(?=\d)", lambda m: m.group(1).upper(), tienda[:1] + tienda[1:].lower())
+            tam = max(18, int(H / 5.2))
+            f = fuente_cursiva(tam, fuente_tienda)
+            while tam > 14 and _ancho_texto(d, nombre_tienda, f) > util:
+                tam -= 1
+                f = fuente_cursiva(tam, fuente_tienda)
+        else:
+            nombre_tienda = tienda
+            f = _ajustar_fuente(d, nombre_tienda, util, max(16, H // 10), 12)
+        l, t, r, b = d.textbbox((0, 0), nombre_tienda, font=f)
+        d.text(((W - (r - l)) // 2 - l, y - t), nombre_tienda, font=f, fill=0)
+        y += (b - t) + 4
 
-    # 2. Nombre (hasta 2 líneas)
-    f_nom = fuente(max(16, H // 11), True)
-    for linea in _partir_en_lineas(d, str(p.get("nombre", "")), f_nom, util, 2):
-        d.text(((W - _ancho_texto(d, linea, f_nom)) // 2, y), linea, font=f_nom, fill=0)
-        y += _alto_texto(d, linea, f_nom) + 3
+    # 2. Prenda | categoría | talla (una línea; si no cabe, letra más pequeña o dos líneas)
+    texto = linea_producto(p)
+    f_nom = _ajustar_fuente(d, texto, util, max(15, H // 12), 13, negrita=True)
+    lineas = [texto] if _ancho_texto(d, texto, f_nom) <= util else _partir_en_lineas(d, texto, f_nom, util, 2)
+    for linea in lineas:
+        l, t, r, b = d.textbbox((0, 0), linea, font=f_nom)
+        d.text(((W - (r - l)) // 2 - l, y - t), linea, font=f_nom, fill=0)
+        y += (b - t) + 3
     y += 3
 
-    # 3. Precio (reservar espacio abajo)
+    # 3. Reservar abajo: código legible + precio
     precio_txt = cfg.cop(p.get("precio", 0))
-    f_precio = _ajustar_fuente(d, precio_txt, util, max(26, H // 5), 18)
-    alto_precio = _alto_texto(d, precio_txt, f_precio)
-    f_cod = fuente(max(13, H // 15), False)
-    alto_cod = _alto_texto(d, codigo, f_cod)
+    f_precio = _ajustar_fuente(d, precio_txt, util, max(24, H // 6), 16)
+    lp, tp_, rp, bp = d.textbbox((0, 0), precio_txt, font=f_precio)
+    f_cod = fuente(max(15, H // 13), False)
+    lc, tc, rc, bc = d.textbbox((0, 0), codigo, font=f_cod)
+    alto_inferior = (bc - tc) + 9 + (bp - tp_) + max(3, margen // 3)
 
-    # 4. Código de barras con módulos enteros (barras nítidas)
+    # 4. Código de barras con módulos enteros (barras nítidas para el lector)
     simb = elegir_simbologia(codigo, simbologia)
     bits = modulos(codigo, simb)
-    quiet = 10 if simb == "ean13" else 10  # zona silenciosa en módulos
-    modulo = max(1, util // (len(bits) + 2 * quiet))
-    modulo = min(modulo, 4)
-    ancho_barras = modulo * len(bits)
-    x0 = (W - ancho_barras) // 2
-    alto_barras = H - y - alto_cod - alto_precio - margen - 10
-    alto_barras = max(alto_barras, int(6 * PUNTOS_POR_MM))
-    for i, b in enumerate(bits):
-        if b == "1":
+    quiet = 10
+    modulo = max(1, min(4, util // (len(bits) + 2 * quiet)))
+    x0 = (W - modulo * len(bits)) // 2
+    alto_barras = max(H - y - alto_inferior - 2, int(5 * PUNTOS_POR_MM))
+    for i, bit in enumerate(bits):
+        if bit == "1":
             d.rectangle([x0 + i * modulo, y, x0 + (i + 1) * modulo - 1, y + alto_barras], fill=0)
-    y += alto_barras + 3
+    y += alto_barras + 6
 
-    # 5. Código legible
-    d.text(((W - _ancho_texto(d, codigo, f_cod)) // 2, y), codigo, font=f_cod, fill=0)
-    y += alto_cod + 4
+    # 5. Código legible y precio
+    d.text(((W - (rc - lc)) // 2 - lc, y - tc), codigo, font=f_cod, fill=0)
+    y += (bc - tc) + 3
+    d.text(((W - (rp - lp)) // 2 - lp, min(y, H - (bp - tp_) - 2) - tp_), precio_txt, font=f_precio, fill=0)
 
-    # 6. Precio
-    d.text(((W - _ancho_texto(d, precio_txt, f_precio)) // 2, H - margen // 2 - alto_precio - 2),
-           precio_txt, font=f_precio, fill=0)
-
-    return img.point(lambda v: 0 if v < 160 else 255, mode="1")
+    return img.point(lambda v: 0 if v < 150 else 255, mode="1")
 
 
 def guardar_etiqueta_png(img: Image.Image, ruta: str | Path) -> Path:

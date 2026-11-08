@@ -50,16 +50,16 @@ QWidget#transparente { background: transparent; }
 
 /* ---------- Barra lateral ---------- */
 QFrame#sidebar { background: $sidebar; border: none; }
-QLabel#logo { color: white; font-size: 20px; font-weight: 900;
+QLabel#logo { color: white; font-size: 17px; font-weight: 900;
               background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3B82F6, stop:1 #1D4ED8);
-              border-radius: 14px; min-width: 46px; max-width: 46px; min-height: 46px; max-height: 46px; }
+              border-radius: 12px; min-width: 40px; max-width: 40px; min-height: 40px; max-height: 40px; }
 QPushButton#navBtn { background: transparent; border: none; border-radius: 12px; color: #8D99AB;
                      padding: 10px 14px; font-size: 14px; font-weight: 700; min-height: 46px; text-align: left; }
 QPushButton#navBtn:hover { color: #FFFFFF; background: rgba(255,255,255,0.04); }
 QPushButton#navBtn:checked { color: #FFFFFF; background: transparent; }
 QFrame#navIndicador { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563EB, stop:1 #3B82F6);
                       border-radius: 12px; }
-QLabel#marca { color: #FFFFFF; font-size: 15px; font-weight: 900; letter-spacing: 1px; }
+QLabel#marca { color: #FFFFFF; font-size: 12px; font-weight: 900; letter-spacing: 0px; }
 QLabel#marcaSub { color: #5F6B7C; font-size: 11px; font-weight: 700; }
 
 /* ---------- Encabezado ---------- */

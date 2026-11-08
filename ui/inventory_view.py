@@ -499,6 +499,16 @@ class EtiquetasDialog(DialogoAnimado):
         self.chk_tienda = QCheckBox("Mostrar nombre de la tienda")
         self.chk_tienda.setChecked(conf.get("etiqueta_mostrar_tienda", "1") == "1")
         form.addRow("", self.chk_tienda)
+        self.letra = QComboBox()
+        self.letra.addItem("Normal (letra de imprenta)", "normal")
+        for nombre in be.FUENTES_CURSIVAS:
+            self.letra.addItem(f"Cursiva · {nombre}", nombre)
+        actual = conf.get("etiqueta_fuente", "Dancing Script") if conf.get("etiqueta_estilo", "cursiva") == "cursiva" \
+            else "normal"
+        self.letra.setCurrentIndex(max(0, self.letra.findData(actual)))
+        self.letra.setToolTip("Solo cambia el nombre de la tienda. Las barras y el código no se tocan: "
+                              "así el lector las sigue leyendo igual.")
+        form.addRow("Letra del nombre", self.letra)
         izq.addLayout(form)
         izq.addStretch()
         b_png = boton("Guardar PNG", size="lg")
@@ -520,7 +530,7 @@ class EtiquetasDialog(DialogoAnimado):
         lay.addWidget(der, 1)
 
         for s in (self.producto.currentIndexChanged, self.ancho.valueChanged, self.alto.valueChanged,
-                  self.simb.currentIndexChanged, self.chk_tienda.toggled):
+                  self.simb.currentIndexChanged, self.chk_tienda.toggled, self.letra.currentIndexChanged):
             s.connect(lambda *_: self._timer.start())
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -529,6 +539,10 @@ class EtiquetasDialog(DialogoAnimado):
         self._ajustar_copias()
         self.producto.currentIndexChanged.connect(lambda *_: self._ajustar_copias())
         self.actualizar()
+
+    def _estilo(self) -> tuple[str, str]:
+        dato = self.letra.currentData()
+        return ("normal", "Dancing Script") if dato == "normal" else ("cursiva", dato)
 
     def _producto(self):
         pid = self.producto.currentData()
@@ -546,7 +560,8 @@ class EtiquetasDialog(DialogoAnimado):
             return
         try:
             self.img = be.generar_etiqueta(p, self.ancho.value(), self.alto.value(), self.simb.currentData(),
-                                           self.ctx.db.get_config("razon_social"), self.chk_tienda.isChecked())
+                                           self.ctx.db.get_config("razon_social"), self.chk_tienda.isChecked(),
+                                           *self._estilo())
         except Exception as e:  # noqa: BLE001
             self.img = None
             self.preview.setText(f"No se pudo generar el código:\n{e}")
@@ -573,7 +588,8 @@ class EtiquetasDialog(DialogoAnimado):
         conf.update({"etiqueta_ancho_mm": str(self.ancho.value()), "etiqueta_alto_mm": str(self.alto.value())})
         self.ctx.db.set_config({"etiqueta_ancho_mm": self.ancho.value(), "etiqueta_alto_mm": self.alto.value(),
                                 "etiqueta_simbologia": self.simb.currentData(),
-                                "etiqueta_mostrar_tienda": "1" if self.chk_tienda.isChecked() else "0"})
+                                "etiqueta_mostrar_tienda": "1" if self.chk_tienda.isChecked() else "0",
+                                "etiqueta_estilo": self._estilo()[0], "etiqueta_fuente": self._estilo()[1]})
         img, n = self.img, self.copias.value()
         en_segundo_plano(lambda: pe.imprimir_etiquetas(img, n, conf),
                          lambda _: self.ctx.notificar(f"{n} etiqueta(s) enviadas a la impresora", "ok"),

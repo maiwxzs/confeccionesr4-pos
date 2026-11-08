@@ -82,6 +82,7 @@ e instale encima (los datos se conservan).
 | Respaldos automáticos (diario + al cerrar caja/salir; últimos 30) | `C:\ProgramData\ConfeccionesR4\respaldos\` |
 | Registro de errores | `C:\ProgramData\ConfeccionesR4\logs\` |
 | Reportes de Excel exportados | `Documentos\ConfeccionesR4 Reportes\` |
+| Copia PDF de cada tiquete y devolución | `Documentos\ConfeccionesR4 Tiquetes\AAAA\MM\` |
 
 Actualizar o desinstalar el programa **no borra** los datos.
 

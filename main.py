@@ -157,7 +157,7 @@ class VentanaPrincipal(QMainWindow):
     def _barra_lateral(self) -> QFrame:
         barra = QFrame()
         barra.setObjectName("sidebar")
-        barra.setFixedWidth(176)
+        barra.setFixedWidth(184)
         v = QVBoxLayout(barra)
         v.setContentsMargins(14, 18, 14, 18)
         v.setSpacing(6)

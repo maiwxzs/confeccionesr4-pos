@@ -128,6 +128,7 @@ class ConfiguracionDialog(DialogoAnimado):
             f.addRow(aviso)
         for clave, txt in (("razon_social", "Razón social"), ("nit", "NIT"), ("regimen", "Régimen tributario"),
                            ("direccion", "Dirección"), ("ciudad", "Ciudad"), ("telefono", "Teléfono"),
+                           ("correo", "Correo (opcional)"), ("redes", "Redes / WhatsApp (opcional)"),
                            ("resolucion_dian", "Resolución DIAN No."), ("prefijo", "Prefijo"),
                            ("rango_desde", "Rango desde"), ("rango_hasta", "Rango hasta")):
             f.addRow(txt, self._linea(clave))
@@ -162,6 +163,45 @@ class ConfiguracionDialog(DialogoAnimado):
                                                          "(se abre solo al cobrar en efectivo)"))
         f.addRow("", self._check("imprimir_codigo_barras_tiquete", "Imprimir código de barras del tiquete "
                                                                     "(para devoluciones rápidas)"))
+        f.addRow("", self._check("guardar_pdf_tiquetes", "Guardar una copia PDF de cada tiquete y comprobante"))
+        carpeta = self._linea("carpeta_tiquetes")
+        carpeta.setPlaceholderText(str(cfg.tiquetes_dir({})))
+        fila_c = QHBoxLayout()
+        fila_c.addWidget(carpeta, 1)
+        b_carp = boton("Abrir carpeta")
+        b_carp.clicked.connect(lambda: abrir_archivo(str(cfg.tiquetes_dir(self._valores()))))
+        fila_c.addWidget(b_carp)
+        f.addRow("Carpeta de PDF", fila_c)
+        # ---- Logo del tiquete
+        f.addRow("", self._check("mostrar_logo_tiquete", "Imprimir el logo de la empresa arriba del tiquete"))
+        self.logo_ruta = self._linea("logo_tiquete")
+        self.logo_ruta.setReadOnly(True)
+        self.logo_ruta.setPlaceholderText("Águila de ConfeccionesR4 (incluida)")
+        self.logo_prev = QLabel()
+        self.logo_prev.setFixedSize(120, 120)
+        self.logo_prev.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.logo_prev.setStyleSheet("background:white;border-radius:8px;")
+        col = QVBoxLayout()
+        col.addWidget(self.logo_ruta)
+        fila_l = QHBoxLayout()
+        b_logo = boton("Cambiar logo…")
+        b_logo.clicked.connect(self._elegir_logo)
+        b_logo_def = boton("Usar el de ConfeccionesR4", "ghost")
+        b_logo_def.clicked.connect(lambda: (self.logo_ruta.setText(""), self._mostrar_logo()))
+        fila_l.addWidget(b_logo)
+        fila_l.addWidget(b_logo_def)
+        fila_l.addStretch()
+        col.addLayout(fila_l)
+        fila_tam = QHBoxLayout()
+        fila_tam.addWidget(QLabel("Tamaño"))
+        fila_tam.addWidget(self._spin("tamano_logo_tiquete", 25, 90, " % del ancho"))
+        fila_tam.addStretch()
+        col.addLayout(fila_tam)
+        caja = QHBoxLayout()
+        caja.addWidget(self.logo_prev)
+        caja.addLayout(col, 1)
+        f.addRow("Logo", caja)
+        self._mostrar_logo()
         f.addRow("USB Vendor ID", self._linea("usb_vendor_id"))
         f.addRow("USB Product ID", self._linea("usb_product_id"))
         fila = QHBoxLayout()
@@ -169,7 +209,10 @@ class ConfiguracionDialog(DialogoAnimado):
         prueba.clicked.connect(self._prueba)
         cajon = boton("Probar cajón")
         cajon.clicked.connect(self._cajon)
+        vista = boton("Ver cómo queda el tiquete")
+        vista.clicked.connect(self._vista_previa)
         fila.addWidget(prueba)
+        fila.addWidget(vista)
         fila.addWidget(cajon)
         fila.addStretch()
         f.addRow("", fila)
@@ -194,6 +237,15 @@ class ConfiguracionDialog(DialogoAnimado):
             ("Automática (EAN-13 si el código es válido, si no Code128)", "auto"),
             ("Code128", "code128"), ("EAN-13", "ean13")]))
         f.addRow("", self._check("etiqueta_mostrar_tienda", "Mostrar el nombre de la tienda en la etiqueta"))
+        f.addRow("Letra del nombre", self._combo("etiqueta_estilo", [
+            ("Cursiva (elegante)", "cursiva"), ("Normal (letra de imprenta)", "normal")]))
+        import barcode_engine as be
+        f.addRow("Tipo de cursiva", self._combo("etiqueta_fuente", [(n, n) for n in be.FUENTES_CURSIVAS]))
+        nota = etiqueta("La cursiva solo se aplica al nombre de la tienda. Las barras y el código impreso "
+                        "debajo no cambian, para que el lector los siga leyendo sin errores. "
+                        "Vea el resultado en Inventario › Etiquetas antes de imprimir el lote.", muted=True)
+        nota.setWordWrap(True)
+        f.addRow("", nota)
         return w
 
     def _tab_operacion(self) -> QWidget:
@@ -397,6 +449,39 @@ class ConfiguracionDialog(DialogoAnimado):
         en_segundo_plano(lambda: pe.enviar(datos, conf, titulo="Prueba"),
                          lambda _: self.ctx.notificar("Página de prueba enviada", "ok"),
                          lambda m: error(self, m, "Error de impresión"))
+
+    def _mostrar_logo(self) -> None:
+        from PySide6.QtGui import QPixmap
+        ruta = pe.ruta_logo({"logo_tiquete": self.logo_ruta.text()})
+        pm = QPixmap(str(ruta)) if ruta else QPixmap()
+        if pm.isNull():
+            self.logo_prev.setText("Sin logo")
+        else:
+            self.logo_prev.setPixmap(pm.scaled(110, 110, Qt.AspectRatioMode.KeepAspectRatio,
+                                               Qt.TransformationMode.SmoothTransformation))
+
+    def _elegir_logo(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        ruta, _ = QFileDialog.getOpenFileName(self, "Elegir logo", "",
+                                              "Imágenes (*.png *.jpg *.jpeg *.bmp *.gif *.webp)")
+        if not ruta:
+            return
+        try:
+            destino = pe.preparar_logo(ruta)
+        except Exception as e:  # noqa: BLE001
+            error(self, f"No se pudo usar esa imagen:\n{e}")
+            return
+        self.logo_ruta.setText(str(destino))
+        self._mostrar_logo()
+        self.ctx.notificar("Logo listo. Use «Ver cómo queda el tiquete» para revisarlo.", "ok")
+
+    def _vista_previa(self) -> None:
+        try:
+            ruta = pe.tiquete_de_muestra(self._conf_temporal())
+        except Exception as e:  # noqa: BLE001
+            error(self, f"No se pudo generar la vista previa:\n{e}")
+            return
+        abrir_archivo(str(ruta))
 
     def _cajon(self) -> None:
         conf = self._conf_temporal()
