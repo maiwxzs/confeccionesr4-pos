@@ -543,7 +543,7 @@ def construir_cierre(cierre: dict[str, Any], conf: dict[str, str]) -> EscPos:
     p = _nuevo(conf)
     _cabecera(p, conf, resolucion=False)
     p.alinear("centro").negrita(True).tamano(1, 2).texto(f"CIERRE DE CAJA N.º {cierre['id']}")
-    p.tamano(1, 1).negrita(False).alinear("izq")
+    p.tamano(1, 1).texto("DOCUMENTO INTERNO - NO ES FACTURA").negrita(False).alinear("izq")
     p.dos_columnas("Apertura:", _fecha_txt(cierre["fecha_apertura"]))
     p.dos_columnas("Cierre:", _fecha_txt(cierre["fecha_cierre"] or ""))
     p.dos_columnas("Cajero:", cierre.get("cajero") or "-")

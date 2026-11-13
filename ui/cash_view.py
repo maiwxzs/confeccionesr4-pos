@@ -23,7 +23,7 @@ from database import POSError
 from ui import theme
 from ui.animations import DialogoAnimado, escalonado
 from ui.seguridad import autorizar, pedir_monto, pedir_motivo
-from ui.widgets import (AlignCenter, AlignRight, Contexto, KpiCard, MoneyEdit, boton, confirmar,
+from ui.widgets import (AlignCenter, AlignRight, Contexto, KpiCard, MoneyEdit, abrir_archivo, boton, confirmar,
                         en_segundo_plano, error, etiqueta, exportar_y_ofrecer_abrir, tarjeta)
 
 
@@ -232,6 +232,19 @@ class ArqueoDialog(DialogoAnimado):
 # =========================================================================== #
 # Resultado del cierre
 # =========================================================================== #
+def guardar_pdf_cierre(ctx: Contexto, cierre: dict):
+    """Comprobante INTERNO del cierre en PDF (carpeta de tiquetes › año › mes › CIERRE-000012.pdf)."""
+    try:
+        import ticket_pdf
+        conf = ctx.conf
+        ruta = ticket_pdf.ruta_tiquete(conf, f"CIERRE-{int(cierre['id']):06d}", cierre.get("fecha_cierre"))
+        if not ruta.exists():
+            ticket_pdf.guardar(pe.construir_cierre(cierre, conf), ruta)
+        return ruta
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class ResultadoCierreDialog(DialogoAnimado):
     def __init__(self, ctx: Contexto, cierre: dict, parent=None, imprimir_auto: bool = True):
         super().__init__(parent)
@@ -299,7 +312,11 @@ class ResultadoCierreDialog(DialogoAnimado):
 
         fila = QHBoxLayout()
         imp = boton("Imprimir", size="lg")
+        imp.setToolTip("Imprime una copia en papel (queda registrado en la auditoría)")
         imp.clicked.connect(self.imprimir)
+        pdf = boton("Ver PDF", size="lg")
+        pdf.setToolTip("El comprobante interno del cierre, guardado en la carpeta de tiquetes")
+        pdf.clicked.connect(self.ver_pdf)
         exp = boton("Exportar a Excel", size="lg")
         exp.clicked.connect(lambda: exportar_y_ofrecer_abrir(
             self, ctx, f"Cierre_Caja_{cierre['id']}_{datetime.now():%Y%m%d}.xlsx",
@@ -309,14 +326,23 @@ class ResultadoCierreDialog(DialogoAnimado):
         wa.clicked.connect(self.whatsapp)
         cerrar = boton("Cerrar", "primary", "lg")
         cerrar.clicked.connect(self.accept)
+        fila.addWidget(pdf)
         fila.addWidget(imp)
         fila.addWidget(exp)
         fila.addWidget(wa)
         fila.addStretch()
         fila.addWidget(cerrar)
         lay.addLayout(fila)
+        self._pdf = guardar_pdf_cierre(ctx, cierre)
         if imprimir_auto:
             self.imprimir()
+
+    def ver_pdf(self) -> None:
+        ruta = self._pdf or guardar_pdf_cierre(self.ctx, self.cierre)
+        if ruta:
+            abrir_archivo(str(ruta))
+        else:
+            error(self, "No se pudo generar el PDF del cierre.")
 
     def whatsapp(self) -> None:
         import nube
@@ -330,6 +356,11 @@ class ResultadoCierreDialog(DialogoAnimado):
 
     def imprimir(self) -> None:
         conf = self.ctx.conf
+        try:
+            self.ctx.db.auditar("CIERRE_IMPRESO", "cierres_caja", self.cierre["id"],
+                                {"cajero": self.ctx.db.get_config("cajero_actual")})
+        except Exception:  # noqa: BLE001
+            pass
         datos = pe.construir_cierre(self.cierre, conf).bytes()
         en_segundo_plano(lambda: pe.enviar(datos, conf, titulo=f"Cierre_{self.cierre['id']}"),
                          al_fallar=lambda m: self.ctx.notificar(f"No se pudo imprimir el cierre: {m}", "error"))
@@ -593,7 +624,8 @@ class CajaView(QWidget):
                              lambda _: self.ctx.notificar("Resumen enviado al celular (Telegram)", "ok"),
                              lambda m: self.ctx.notificar(f"No se pudo enviar el resumen: {m}", "warn"))
         self.ctx.bus.caja_cambiada.emit()
-        ResultadoCierreDialog(self.ctx, cierre, self).exec()
+        ResultadoCierreDialog(self.ctx, cierre, self,
+                              imprimir_auto=db.get_config("imprimir_cierre", "0") == "1").exec()
 
     def ver_cierre(self) -> None:
         fila = self.tabla.currentRow()

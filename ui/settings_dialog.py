@@ -280,6 +280,8 @@ class ConfiguracionDialog(DialogoAnimado):
         f.addRow("Cajero actual", self._linea("cajero_actual"))
         f.addRow("Stock crítico (≤)", self._spin("stock_critico", 0, 1000, " und"))
         f.addRow("Plazo de los separados", self._spin("separado_dias_limite", 1, 180, " días"))
+        f.addRow("", self._check("imprimir_cierre", "Imprimir el comprobante al cerrar la caja (si no, queda "
+                                                    "interno: PDF + historial de cierres)"))
         f.addRow("", self._check("permitir_stock_negativo", "Permitir vender sin existencias (stock negativo)"))
         f.addRow("", self._check("arqueo_ciego", "Arqueo ciego: ocultar el efectivo esperado durante el turno"))
         return w

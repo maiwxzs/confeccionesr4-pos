@@ -195,6 +195,7 @@ DEFAULT_CONFIG: dict[str, str] = {
     "separado_dias_limite": "30",      # plazo para pagar un separado
     "carpeta_respaldo_nube": "",       # p. ej. G:\\Mi unidad\\ConfeccionesR4 Respaldos (Google Drive para escritorio)
     "ultimo_respaldo_nube": "",
+    "imprimir_cierre": "0",            # 0 = el cierre queda INTERNO (PDF + historial), no se imprime solo
     "whatsapp_dueno": "",              # celular del dueño (10 dígitos) para el resumen del cierre
     "telegram_token": "",              # opcional: envío automático por Telegram
     "telegram_chat": "",
