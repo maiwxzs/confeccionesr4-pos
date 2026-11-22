@@ -1,17 +1,3 @@
-"""
-config.py — Constantes globales, rutas y utilidades de formato.
-
-ConfeccionesR4 POS · Bogotá D.C.
-
-Rutas
------
-* Recursos de solo lectura (íconos, BD plantilla) se buscan dentro del paquete
-  generado por PyInstaller (``sys._MEIPASS``) o junto al código fuente.
-* Los datos de trabajo (base de datos, respaldos, logs) viven en
-  ``C:\\ProgramData\\ConfeccionesR4``: carpeta compartida por todos los usuarios de Windows del
-  equipo, que NO se toca al actualizar ni al desinstalar el programa.
-  (Versiones anteriores usaban %LOCALAPPDATA%; se migra automáticamente.)
-"""
 from __future__ import annotations
 
 import os
@@ -20,17 +6,13 @@ from pathlib import Path
 
 APP_NAME = "ConfeccionesR4 POS"
 APP_ID = "ConfeccionesR4"
-APP_VERSION = "1.1.0"            # la compilación automática (GitHub Actions) la reemplaza: 1.1.<n>
-URL_ACTUALIZACIONES = ""         # idem: https://github.com/<usuario>/<repo>/releases/latest/download/latest.json
+APP_VERSION = "1.1.0"
+URL_ACTUALIZACIONES = ""
 DB_FILENAME = "confeccionesr4.db"
 
-# --------------------------------------------------------------------------- #
 # Rutas
-# --------------------------------------------------------------------------- #
 def resource_dir() -> Path:
-    """Directorio de recursos empaquetados (assets, plantillas)."""
     if getattr(sys, "frozen", False):
-        # PyInstaller --onedir: _MEIPASS = carpeta _internal; --onefile: carpeta temporal
         return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
     return Path(__file__).resolve().parent
 
@@ -40,7 +22,6 @@ def resource_path(*parts: str) -> Path:
 
 
 def _cargar_build_info() -> None:
-    """assets/build_info.json lo escribe build_app.py: versión y URL de actualizaciones del .exe."""
     global APP_VERSION, URL_ACTUALIZACIONES
     p = resource_path("assets", "build_info.json")
     if p.exists():
@@ -60,7 +41,6 @@ _DATA_DIR: Path | None = None
 
 
 def data_dir() -> Path:
-    """Directorio de datos compartido: %PROGRAMDATA%\\ConfeccionesR4 (o R4_DATA_DIR para pruebas)."""
     global _DATA_DIR
     if _DATA_DIR is not None:
         return _DATA_DIR
@@ -69,7 +49,7 @@ def data_dir() -> Path:
         root = Path(override)
     elif os.environ.get("PROGRAMDATA"):
         root = Path(os.environ["PROGRAMDATA"]) / APP_ID
-    else:  # Linux / macOS (desarrollo)
+    else:
         root = Path.home() / f".{APP_ID.lower()}"
     root.mkdir(parents=True, exist_ok=True)
     _migrar_desde_localappdata(root)
@@ -78,7 +58,6 @@ def data_dir() -> Path:
 
 
 def _migrar_desde_localappdata(destino: Path) -> None:
-    """La v1.0 inicial guardaba en %LOCALAPPDATA%: se mueve una sola vez a ProgramData."""
     viejo = os.environ.get("LOCALAPPDATA")
     if not viejo or os.environ.get("R4_DATA_DIR"):
         return
@@ -97,7 +76,6 @@ def _migrar_desde_localappdata(destino: Path) -> None:
 
 
 def db_path() -> Path:
-    # Permite forzar otra ruta (pruebas, red local) con variable de entorno
     override = os.environ.get("R4_DB_PATH")
     return Path(override) if override else data_dir() / DB_FILENAME
 
@@ -109,7 +87,6 @@ def backups_dir() -> Path:
 
 
 def exports_dir() -> Path:
-    """Carpeta por defecto para reportes: Documentos\\ConfeccionesR4 Reportes."""
     docs = Path.home() / "Documents"
     if not docs.exists():
         docs = Path.home()
@@ -119,7 +96,6 @@ def exports_dir() -> Path:
 
 
 def tiquetes_dir(conf: dict | None = None) -> Path:
-    """Carpeta de las copias PDF de los tiquetes (configurable en Ajustes)."""
     personalizada = (conf or {}).get("carpeta_tiquetes", "").strip()
     if personalizada:
         p = Path(personalizada)
@@ -136,19 +112,16 @@ def logs_dir() -> Path:
     return p
 
 
-# --------------------------------------------------------------------------- #
-# Datos fiscales por defecto (se inyectan en la tabla `configuracion`)
-# --------------------------------------------------------------------------- #
 DEFAULT_CONFIG: dict[str, str] = {
     # Cabecera legal
     "razon_social": "CONFECCIONESR4",
-    "nit": "700571557-9",
+    "nit": "",
     "regimen": "No Responsable de IVA (Art. 512-13 / 437 E.T. Colombia)",
-    "direccion": "CRA 24 #26-45 BARRIO SALITRE LC-1",
-    "ciudad": "Bogotá D.C.",
-    "telefono": "3028694690",
-    "correo": "",                      # opcional, sale bajo el teléfono en el tiquete
-    "redes": "",                       # opcional, p. ej. «IG @confeccionesr4 · WhatsApp 302...»
+    "direccion": "",
+    "ciudad": "",
+    "telefono": "",
+    "correo": "",
+    "redes": "",
     "resolucion_dian": "18760000001",
     "prefijo": "SETP",
     "rango_desde": "990000000",
@@ -156,81 +129,71 @@ DEFAULT_CONFIG: dict[str, str] = {
     "consecutivo_siguiente": "990000000",
     "mensaje_pie": "¡Gracias por su compra!\nCambios dentro de los 8 días con tiquete y etiqueta.",
     # Impresión
-    "impresora_tiquetes": "",          # Nombre de la impresora Windows (vacío = predeterminada)
-    "impresora_etiquetas": "",         # Puede ser la misma térmica u otra
-    "transporte_impresion": "win32",   # win32 | usb | archivo
-    "usb_vendor_id": "0x0483",         # Solo si transporte = usb (python-escpos + WinUSB)
+    "impresora_tiquetes": "",
+    "impresora_etiquetas": "",
+    "transporte_impresion": "win32",
+    "usb_vendor_id": "0x0483",
     "usb_product_id": "0x5743",
-    "ancho_papel_mm": "80",            # 80 | 58
-    "codepage": "cp850",               # cp850 (ESC t 2) recomendado para Jaltech
-    "guardar_pdf_tiquetes": "1",       # copia PDF de cada tiquete y comprobante
-    "carpeta_tiquetes": "",            # vacío = Documentos\\ConfeccionesR4 Tiquetes
-    "abrir_cajon_efectivo": "0",       # 1 solo si hay cajón monedero conectado a la impresora (RJ11)
+    "ancho_papel_mm": "80",
+    "codepage": "cp850",
+    "guardar_pdf_tiquetes": "1",
+    "carpeta_tiquetes": "",
+    "abrir_cajon_efectivo": "0",
     "imprimir_codigo_barras_tiquete": "1",
     "mostrar_logo_tiquete": "1",
-    "logo_tiquete": "",                # vacío = águila de ConfeccionesR4 incluida en el programa
-    "tamano_logo_tiquete": "50",       # % del ancho del papel
+    "logo_tiquete": "",
+    "tamano_logo_tiquete": "50",
     "etiqueta_ancho_mm": "50",
     "etiqueta_alto_mm": "30",
-    "etiqueta_columnas": "1",         # etiquetas por fila del rollo (1, 2, 3 o 4)
-    "etiqueta_separacion_mm": "2",    # espacio entre una etiqueta y la de al lado
-    "etiqueta_margen_mm": "0",        # corrimiento desde el borde izquierdo del rollo
-    "etiqueta_simbologia": "auto",     # auto (EAN-13 si es válido, si no Code128) | code128 | ean13
-    "modo_etiquetas": "windows",       # windows (driver GDI, cualquier impresora) | escpos | tspl
+    "etiqueta_columnas": "1",
+    "etiqueta_separacion_mm": "2",
+    "etiqueta_margen_mm": "0",
+    "etiqueta_simbologia": "auto",
+    "modo_etiquetas": "windows",
     "etiqueta_mostrar_tienda": "1",
-    "etiqueta_estilo": "cursiva",      # cursiva | normal (solo el nombre de la tienda)
-    "etiqueta_fuente": "Dancing Script",  # Dancing Script | Great Vibes | Allura
+    "etiqueta_estilo": "cursiva",
+    "etiqueta_fuente": "Dancing Script",
     # Operación
     "permitir_stock_negativo": "0",
     "stock_critico": "3",
-    "arqueo_ciego": "1",               # Oculta el efectivo esperado durante el turno
-    # Actualizaciones remotas (opcional; el POS funciona 100 % sin internet)
-    "url_actualizaciones": "",         # vacío = usar la URL integrada al compilar (URL_ACTUALIZACIONES)
+    "arqueo_ciego": "1",
+    "url_actualizaciones": "",
     "buscar_actualizaciones": "1",
-    "actualizar_automaticamente": "1", # instala sin preguntar al abrir / cuando no hay venta en curso
+    "actualizar_automaticamente": "1",
     "cajero_actual": "Cajero",
     # v1.1
-    "imprimir_tiquete_defecto": "1",   # el botón «Imprimir tiquete» del POS empieza activado
-    "tiquete_nombre_cursiva": "1",     # nombre de la tienda en el tiquete con la misma cursiva de las etiquetas
-    "separado_dias_limite": "30",      # plazo para pagar un separado
-    "carpeta_respaldo_nube": "",       # p. ej. G:\\Mi unidad\\ConfeccionesR4 Respaldos (Google Drive para escritorio)
+    "imprimir_tiquete_defecto": "1",
+    "tiquete_nombre_cursiva": "1",
+    "separado_dias_limite": "30",
+    "carpeta_respaldo_nube": "",
     "ultimo_respaldo_nube": "",
-    "imprimir_cierre": "0",            # 0 = el cierre queda INTERNO (PDF + historial), no se imprime solo
-    "whatsapp_dueno": "",              # celular del dueño (10 dígitos) para el resumen del cierre
-    "telegram_token": "",              # opcional: envío automático por Telegram
+    "imprimir_cierre": "0",
+    "whatsapp_dueno": "",
+    "telegram_token": "",
     "telegram_chat": "",
 }
 
 CATEGORIAS_BASE = ["Jeans Hombre", "Jeans Mujer", "Blusas", "Accesorios"]
 
-# Resolución PÚBLICA del set de pruebas de la DIAN (habilitación de facturación electrónica).
-# No es una autorización real: si sigue configurada, el tiquete se marca como comprobante interno.
 RESOLUCION_PRUEBA_DIAN = {"resolucion_dian": "18760000001", "prefijo": "SETP",
                           "rango_desde": "990000000", "rango_hasta": "995000000"}
 
 
 def es_resolucion_de_prueba(conf: dict) -> bool:
-    """True si NO hay una resolución DIAN real: la pública de pruebas (SETP) o ninguna.
-    En ese caso el tiquete se imprime como «Comprobante interno de venta»."""
     resol = str(conf.get("resolucion_dian", "")).strip()
     return (not resol or resol == RESOLUCION_PRUEBA_DIAN["resolucion_dian"]
             or str(conf.get("prefijo", "")).strip().upper() == RESOLUCION_PRUEBA_DIAN["prefijo"])
 METODOS_PAGO = ["Efectivo", "Nequi", "Bre-B", "Datáfono"]
-# Etiquetas que pueden aparecer en tiquetes y cierres (Daviplata: ventas anteriores a la v1.1)
 METODOS_HISTORICOS = METODOS_PAGO + ["Mixto", "Cambio", "Separado", "Daviplata"]
-METODO_CREDITO = "Crédito cambio"     # crédito interno de un cambio de prenda (no es dinero)
+METODO_CREDITO = "Crédito cambio"
 COLORES_METODO = {"Efectivo": "#22C55E", "Nequi": "#A855F7", "Bre-B": "#F97316", "Datáfono": "#3B82F6",
                   "Daviplata": "#EF4444", "Separado": "#EAB308", "Mixto": "#14B8A6", "Cambio": "#64748B"}
 
-# Denominaciones COP en circulación para el arqueo
 DENOMINACIONES_COP = [100_000, 50_000, 20_000, 10_000, 5_000, 2_000, 1_000, 500, 200, 100, 50]
 
 
-# --------------------------------------------------------------------------- #
 # Formato monetario colombiano
-# --------------------------------------------------------------------------- #
 def cop(valor: float | int | None, simbolo: bool = True) -> str:
-    """Formatea un valor en pesos colombianos: 1250000 -> '$ 1.250.000'."""
     if valor is None:
         valor = 0
     negativo = valor < 0
@@ -240,7 +203,6 @@ def cop(valor: float | int | None, simbolo: bool = True) -> str:
 
 
 def parse_cop(texto: str | float | int | None) -> int:
-    """Convierte '$ 1.250.000', '1250000', '80,000' o 80000.0 en entero de pesos."""
     if texto is None:
         return 0
     if isinstance(texto, (int, float)):
@@ -253,13 +215,11 @@ def parse_cop(texto: str | float | int | None) -> int:
         return 0
     neg = s.startswith("-")
     s = s.lstrip("-")
-    # Pesos colombianos no usan decimales en el día a día: separadores . y , son de miles,
-    # salvo que haya exactamente 1-2 dígitos al final después de una coma (ej. "80000,50").
     if "," in s and len(s.rsplit(",", 1)[1]) in (1, 2) and "." not in s.rsplit(",", 1)[1]:
         entero, dec = s.rsplit(",", 1)
         s = entero.replace(".", "").replace(",", "") + "." + dec
     elif "." in s and len(s.rsplit(".", 1)[1]) in (1, 2) and s.count(".") == 1 and "," not in s:
-        pass  # "80000.5" -> decimal
+        pass
     else:
         s = s.replace(".", "").replace(",", "")
     try:

@@ -1,19 +1,3 @@
-"""
-nube.py — Respaldo en Google Drive y resumen del cierre al celular del dueño.
-
-Respaldo en la nube
--------------------
-No necesita cuentas ni claves dentro del programa: se usa **Google Drive para escritorio** (gratis),
-que crea en el PC una unidad «G:\\Mi unidad» sincronizada con la cuenta de Google. El POS copia
-ahí la base de datos (después de cada cierre de caja y una vez al día) y Drive la sube sola.
-Si el PC se daña o lo roban, la información está en drive.google.com.
-
-Resumen al celular
-------------------
-· WhatsApp: abre WhatsApp (app o web) con el mensaje ya escrito al número del dueño; solo hay
-  que pulsar Enviar (WhatsApp no permite envíos automáticos sin un servicio pagado).
-· Telegram (opcional, 100 % automático y gratis): con un bot propio (token + chat).
-"""
 from __future__ import annotations
 
 import json
@@ -32,11 +16,8 @@ CARPETA = "ConfeccionesR4 Respaldos"
 CONSERVAR = 60
 
 
-# --------------------------------------------------------------------------- #
 # Google Drive
-# --------------------------------------------------------------------------- #
 def detectar_drive() -> Path | None:
-    """Busca la carpeta de Google Drive para escritorio (o, si no hay, OneDrive)."""
     candidatos: list[Path] = []
     for letra in "GHIJKLMNOPQRSTUVWXYZDEF":
         for nombre in ("Mi unidad", "My Drive"):
@@ -57,7 +38,6 @@ def detectar_drive() -> Path | None:
 
 
 def respaldar_en_nube(db, motivo: str = "") -> Path | None:
-    """Copia la base de datos a la carpeta sincronizada. Devuelve la ruta o None si no está configurada."""
     carpeta = (db.get_config("carpeta_respaldo_nube") or "").strip()
     if not carpeta:
         return None
@@ -68,10 +48,10 @@ def respaldar_en_nube(db, motivo: str = "") -> Path | None:
     destino_dir.mkdir(parents=True, exist_ok=True)
     nombre = f"respaldo_{datetime.now():%Y%m%d_%H%M%S}{('_' + motivo) if motivo else ''}.db"
     temporal = cfg.backups_dir() / ("nube_" + nombre)
-    db.respaldar(temporal, conservar=10_000)     # copia en caliente, consistente
+    db.respaldar(temporal, conservar=10_000)
     final = destino_dir / nombre
     shutil.copy2(temporal, destino_dir / (nombre + ".parcial"))
-    os.replace(destino_dir / (nombre + ".parcial"), final)   # Drive solo ve el archivo ya completo
+    os.replace(destino_dir / (nombre + ".parcial"), final)
     try:
         temporal.unlink()
     except OSError:
@@ -95,9 +75,7 @@ def respaldo_nube_pendiente(db, horas: int = 20) -> bool:
         return True
 
 
-# --------------------------------------------------------------------------- #
 # Resumen del cierre
-# --------------------------------------------------------------------------- #
 def texto_cierre(cierre: dict[str, Any], conf: dict[str, str]) -> str:
     cop = cfg.cop
     try:
@@ -136,7 +114,7 @@ def texto_cierre(cierre: dict[str, Any], conf: dict[str, str]) -> str:
 def numero_whatsapp(numero: str) -> str:
     digitos = "".join(ch for ch in str(numero) if ch.isdigit())
     if len(digitos) == 10 and digitos.startswith("3"):
-        digitos = "57" + digitos                  # celular colombiano
+        digitos = "57" + digitos
     return digitos
 
 
@@ -145,7 +123,6 @@ def url_whatsapp(numero: str, texto: str) -> str:
 
 
 def enviar_telegram(token: str, chat: str, texto: str) -> None:
-    """Envío automático por un bot de Telegram (verificación TLS siempre activa)."""
     import updater
     token = (token or "").strip()
     if not token or not str(chat).strip() or any(ch not in string.ascii_letters + string.digits + ":_-" for ch in token):
@@ -156,11 +133,11 @@ def enviar_telegram(token: str, chat: str, texto: str) -> None:
     for _n, ctx in updater._contextos_ssl():
         try:
             req = urllib.request.Request(url, data=datos, headers={"User-Agent": f"ConfeccionesR4-POS/{cfg.APP_VERSION}"})
-            with urllib.request.urlopen(req, timeout=10, context=ctx) as r:  # noqa: S310
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
                 if not json.loads(r.read().decode("utf-8")).get("ok"):
                     raise ValueError("Telegram rechazó el mensaje (revise el token y el chat).")
             return
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             ultimo = e
             if "CERTIFICATE" not in str(e).upper():
                 break

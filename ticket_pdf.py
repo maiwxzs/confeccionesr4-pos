@@ -1,12 +1,3 @@
-"""
-ticket_pdf.py — Copia en PDF de cada tiquete, idéntica a la que sale por la impresora térmica.
-
-Se dibuja con Pillow (ya incluido en el programa) a partir de las mismas líneas que se envían
-a la Jaltech: encabezado, prendas, totales, negritas, letra doble y código de barras Code128.
-Ancho real del rollo (80 mm o 58 mm) a 300 dpi, listo para imprimir en hoja o enviar por WhatsApp.
-
-Ruta: <carpeta de tiquetes>\\AAAA\\MM\\<número>.pdf   (p. ej. SETP990000015.pdf)
-"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -48,22 +39,20 @@ def _ancho_px(texto: str, f) -> int:
 
 
 def renderizar(escpos) -> Image.Image:
-    """Convierte un EscPos (printer_engine) en una imagen del tiquete."""
     mm = DPI / 25.4
     ancho_papel = int(escpos.ancho_mm * mm)
     margen = int(MARGEN_MM * mm)
     util = ancho_papel - 2 * margen
-    # Tamaño de letra para que `cols` caracteres llenen el ancho útil
     tam = 10
     while _ancho_px("M" * escpos.cols, _fuente(tam + 1, False)) <= util:
         tam += 1
     alto_linea = int(tam * 1.32)
 
-    bloques = []                             # (tipo, datos, alto)
+    bloques = []
     for ln in escpos.lineas:
         if "img" in ln:
             im = ln["img"]
-            esc = ancho_papel / im.width          # la imagen ocupa el mismo ancho de papel que en la térmica
+            esc = ancho_papel / im.width
             bloques.append(("img", im.convert("L").resize((ancho_papel, max(1, int(im.height * esc))),
                                                           Image.NEAREST), int(im.height * esc)))
         elif "barcode" in ln:
@@ -82,7 +71,7 @@ def renderizar(escpos) -> Image.Image:
             from barcode_engine import modulos
             try:
                 bits = modulos(dato, "code128")
-            except Exception:  # noqa: BLE001
+            except Exception:
                 bits = ""
             if bits:
                 modulo = max(1, min(4, int(util * 0.8) // len(bits)))
@@ -101,10 +90,9 @@ def renderizar(escpos) -> Image.Image:
                 if ln["w"] and not ln["h"]:
                     f = _fuente(tam * 2, ln["b"])
                 if ln["h"] and not ln["w"]:
-                    # alto doble, ancho normal: misma letra un poco más grande, sin pasarse del ancho
                     f = _fuente(int(tam * 1.5), ln["b"])
                 w = _ancho_px(texto, f)
-                if w > util:                 # nunca cortar texto: reducir si no cabe
+                if w > util:
                     f = _fuente(max(8, int(f.size * util / w)), ln["b"])
                     w = _ancho_px(texto, f)
                 if ln["a"] == "centro":
@@ -133,13 +121,12 @@ def guardar(escpos, ruta: Path) -> Path:
     ruta = Path(ruta)
     ruta.parent.mkdir(parents=True, exist_ok=True)
     tmp = ruta.with_suffix(".tmp")
-    img.point(lambda v: 0 if v < 150 else 255).convert("1").save(tmp, "PDF", resolution=DPI)  # 1 bit: ~10x más liviano
+    img.point(lambda v: 0 if v < 150 else 255).convert("1").save(tmp, "PDF", resolution=DPI)
     tmp.replace(ruta)
     return ruta
 
 
 def guardar_venta(venta: dict, conf: dict) -> Path | None:
-    """Copia PDF del tiquete original (sin la marca COPIA ni la apertura del cajón)."""
     if conf.get("guardar_pdf_tiquetes", "1") != "1":
         return None
     import printer_engine as pe

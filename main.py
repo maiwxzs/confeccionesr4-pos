@@ -1,17 +1,3 @@
-"""
-main.py — Punto de entrada de ConfeccionesR4 POS (PySide6).
-
-Arranque:
-  1. Modo actualizador (--aplicar-actualizacion): reemplaza el .exe y termina.
-  2. Registro de errores en C:\\ProgramData\\ConfeccionesR4\\logs (sin consola visible).
-  3. Instancia única (QLockFile): evita abrir el POS dos veces.
-  4. Base de datos: se crea/migra sola en C:\\ProgramData\\ConfeccionesR4.
-  5. Ventana principal maximizada, tema oscuro, 5 módulos con transiciones animadas:
-     Dashboard · Vender · Documentos · Inventario · Caja   (+ Ajustes)
-  6. Búsqueda silenciosa de actualizaciones firmadas (si hay internet y está configurada).
-
-Atajos globales: Ctrl+1..6 cambian de módulo.
-"""
 from __future__ import annotations
 
 import logging
@@ -24,21 +10,21 @@ from logging.handlers import RotatingFileHandler
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import updater  # noqa: E402
+import updater
 
-if updater.modo_aplicar_desde_argv(sys.argv):   # .exe nuevo ejecutándose como instalador
+if updater.modo_aplicar_desde_argv(sys.argv):
     sys.exit(0)
 
-from PySide6.QtCore import QLockFile, Qt, QTimer  # noqa: E402
-from PySide6.QtGui import QFont, QIcon, QKeySequence, QShortcut  # noqa: E402
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,  # noqa: E402
+from PySide6.QtCore import QLockFile, Qt, QTimer
+from PySide6.QtGui import QFont, QIcon, QKeySequence, QShortcut
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,
                                QMessageBox, QVBoxLayout, QWidget)
 
-import config as cfg  # noqa: E402
-from database import Database  # noqa: E402
-from ui import theme  # noqa: E402
-from ui.animations import FadeStack, IndicadorLateral  # noqa: E402
-from ui.widgets import Bus, Contexto, Toast, boton, confirmar, en_segundo_plano, desplazable, refrescar_estilo  # noqa: E402
+import config as cfg
+from database import Database
+from ui import theme
+from ui.animations import FadeStack, IndicadorLateral
+from ui.widgets import Bus, Contexto, Toast, boton, confirmar, en_segundo_plano, desplazable, refrescar_estilo
 
 log = logging.getLogger("r4")
 
@@ -46,9 +32,7 @@ DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
 
 
-# =========================================================================== #
 # Infraestructura
-# =========================================================================== #
 def configurar_logs() -> None:
     h = RotatingFileHandler(cfg.logs_dir() / "confeccionesr4.log", maxBytes=2_000_000, backupCount=5,
                             encoding="utf-8")
@@ -67,7 +51,6 @@ def instalar_manejador_errores() -> None:
 
 
 def preparar_base_datos() -> None:
-    """Primera ejecución: copia la BD limpia empaquetada dentro del .exe."""
     destino = cfg.db_path()
     if destino.exists():
         return
@@ -86,19 +69,15 @@ def icono_app() -> QIcon:
 
 
 def cerrar_splash() -> None:
-    """Cierra la pantalla de carga de PyInstaller (--splash) si existe."""
     try:
-        import pyi_splash  # type: ignore
+        import pyi_splash
         pyi_splash.close()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
-# =========================================================================== #
 # Ventana principal
-# =========================================================================== #
 class VentanaPrincipal(QMainWindow):
-    # Altura (px) por debajo de la cual cada pantalla deja de encogerse y aparece la barra para bajar
     ALTO_MINIMO = {"dashboard": 760, "historial": 720, "inventario": 560, "caja": 900, "separados": 640}
 
     MODULOS = [
@@ -149,16 +128,15 @@ class VentanaPrincipal(QMainWindow):
         self._reloj.start(10_000)
         self._tick()
         self._estado_caja()
-        self.ir_a(0)                                     # el Dashboard es la primera pantalla
+        self.ir_a(0)
         self._act_pendiente = None
         QTimer.singleShot(900, self._avisos_inicio)
         QTimer.singleShot(1500, self._automatizaciones_inicio)
         QTimer.singleShot(6000, self._buscar_actualizacion)
-        self._timer_act = QTimer(self)                     # revisa de nuevo cada 3 horas
+        self._timer_act = QTimer(self)
         self._timer_act.timeout.connect(self._buscar_actualizacion)
         self._timer_act.start(3 * 60 * 60 * 1000)
 
-    # ---------------------------------------------------------------- layout
     def _barra_lateral(self) -> QFrame:
         barra = QFrame()
         barra.setObjectName("sidebar")
@@ -201,6 +179,11 @@ class VentanaPrincipal(QMainWindow):
         ajustes.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         ajustes.clicked.connect(self.abrir_configuracion)
         v.addWidget(ajustes)
+        firma = QLabel("by maiwxzs")
+        firma.setObjectName("firma")
+        firma.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        firma.setToolTip(f"{cfg.APP_NAME} v{cfg.APP_VERSION} · hecho por maiwxzs para Confecciones R4")
+        v.addWidget(firma)
         return barra
 
     def _encabezado(self) -> QFrame:
@@ -224,9 +207,7 @@ class VentanaPrincipal(QMainWindow):
         h.addWidget(self.lbl_reloj)
         return f
 
-    # ---------------------------------------------------------------- navegación
     def _crear_vista(self, clave: str) -> QWidget:
-        # Importación diferida: solo se carga lo que se usa (arranque más rápido)
         if clave == "pos":
             from ui.pos_view import POSView
             return POSView(self.ctx)
@@ -254,7 +235,6 @@ class VentanaPrincipal(QMainWindow):
             finally:
                 QApplication.restoreOverrideCursor()
             self.vistas[clave] = vista
-            # Vender ya se adapta solo (modo compacto); el resto se desplaza en pantallas bajas
             alto = self.ALTO_MINIMO.get(clave)
             pagina = vista if alto is None else desplazable(vista, alto)
             self._paginas[clave] = pagina
@@ -266,17 +246,16 @@ class VentanaPrincipal(QMainWindow):
         self.indicador.ir_a(boton_nav, animar=self.isVisible())
         self.lbl_titulo.setText(getattr(vista, "titulo", txt))
 
-    def showEvent(self, e) -> None:  # noqa: N802
+    def showEvent(self, e) -> None:
         super().showEvent(e)
         QTimer.singleShot(0, lambda: self.indicador.ir_a(self.grupo_nav.checkedButton(), animar=False))
 
-    def resizeEvent(self, e) -> None:  # noqa: N802
+    def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
         b = self.grupo_nav.checkedButton()
         if b is not None:
             QTimer.singleShot(0, lambda: self.indicador.ir_a(b, animar=False))
 
-    # ---------------------------------------------------------------- estado
     def _tick(self) -> None:
         n = datetime.now()
         hora = n.strftime("%I:%M").lstrip("0")
@@ -309,11 +288,9 @@ class VentanaPrincipal(QMainWindow):
         elif n:
             self.ctx.notificar(f"{n} productos con stock crítico o agotado", "warn")
 
-    # ---------------------------------------------------------------- automatizaciones
     def _automatizaciones_inicio(self) -> None:
         from ui.asistente import AsistenteInicial, necesita_asistente
         if necesita_asistente(self.ctx.db):
-            # Programa recién instalado o entregado: el nuevo dueño configura su negocio
             dlg = AsistenteInicial(self.ctx, self)
             if dlg.exec():
                 self._estado_caja()
@@ -327,11 +304,9 @@ class VentanaPrincipal(QMainWindow):
             self._asistente_primer_uso()
 
     def _autodetectar_impresora(self) -> None:
-        """Si no hay impresora elegida, toma la térmica instalada (Jaltech / POS-80 / 58 mm…)."""
         db = self.ctx.db
         import printer_engine as pe
         instaladas = pe.listar_impresoras()
-        # Impresora de etiquetas (SAT TT460…): se elige sola si hay exactamente una
         if not db.get_config("impresora_etiquetas"):
             etiq = pe.detectar_impresora_etiquetas(instaladas)
             if len(etiq) == 1:
@@ -371,7 +346,6 @@ class VentanaPrincipal(QMainWindow):
             self.ir_a([c for _, c in self.MODULOS].index("inventario"))
             self.vistas["inventario"].importar()
 
-    # ---------------------------------------------------------------- actualizaciones
     def _url_actualizaciones(self) -> str:
         return updater.url_efectiva(self.ctx.db.get_config("url_actualizaciones"))
 
@@ -392,7 +366,6 @@ class VentanaPrincipal(QMainWindow):
         if info is None:
             return
         self._act_pendiente = info
-        # Nunca interrumpir una venta ni un diálogo abierto: se reintenta en 2 minutos
         if self._vendiendo() or QApplication.activeModalWidget() is not None:
             QTimer.singleShot(120_000, lambda: self._actualizacion_encontrada(self._act_pendiente))
             return
@@ -414,7 +387,7 @@ class VentanaPrincipal(QMainWindow):
         if ConfiguracionDialog(self.ctx, self).exec():
             self.ctx.notificar("Configuración guardada", "ok")
 
-    def closeEvent(self, e) -> None:  # noqa: N802
+    def closeEvent(self, e) -> None:
         actualizando = bool(QApplication.instance().property("actualizando"))
         if not actualizando and self._vendiendo() and not confirmar(
                 self, "Hay una venta EN CURSO sin cobrar.\n\n¿Cerrar el programa de todos modos? "
@@ -428,25 +401,19 @@ class VentanaPrincipal(QMainWindow):
             return
         try:
             self.ctx.db.respaldar()
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("No se pudo respaldar al salir")
         self.ctx.db.close()
         e.accept()
 
 
-# =========================================================================== #
 def actualizacion_de_rescate(db) -> bool:
-    """
-    Red de seguridad: si una versión publicada no logra abrir la ventana, antes de mostrar el error
-    se busca una versión más nueva (corregida) y se instala sola. Así un error nunca deja la tienda
-    sin poder actualizar.
-    """
     if not getattr(sys, "frozen", False) or not updater.clave_publica():
         return False
     try:
         url = updater.url_efectiva(db.get_config("url_actualizaciones"))
         info = updater.buscar(url) if url else None
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.exception("Actualización de rescate: no se pudo consultar")
         return False
     if info is None:
@@ -462,15 +429,20 @@ def main() -> int:
     configurar_logs()
     instalar_manejador_errores()
     if sys.platform == "win32":
-        try:  # ícono propio en la barra de tareas (no el de Python)
+        try:
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ConfeccionesR4.POS.1")
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     updater.limpiar_restos()
 
     app = QApplication(sys.argv)
     app.setApplicationName(cfg.APP_NAME)
+    from PySide6.QtGui import QFontDatabase
+    for fuente in ("DancingScript.ttf",):
+        ruta = cfg.resource_path("assets", "fonts", fuente)
+        if ruta.exists():
+            QFontDatabase.addApplicationFont(str(ruta))
     app.setOrganizationName(cfg.APP_ID)
     app.setApplicationVersion(cfg.APP_VERSION)
     app.setWindowIcon(icono_app())
@@ -479,7 +451,7 @@ def main() -> int:
 
     candado = QLockFile(str(cfg.data_dir() / "confeccionesr4.lock"))
     candado.setStaleLockTime(0)
-    if not candado.tryLock(5000):   # espera a la instancia anterior si se está reiniciando
+    if not candado.tryLock(5000):
         cerrar_splash()
         QMessageBox.information(None, cfg.APP_NAME, "ConfeccionesR4 POS ya está abierto.")
         return 0
@@ -487,7 +459,7 @@ def main() -> int:
     preparar_base_datos()
     try:
         db = Database()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.exception("No se pudo abrir la base de datos")
         cerrar_splash()
         QMessageBox.critical(None, cfg.APP_NAME, f"No se pudo abrir la base de datos:\n{e}")
@@ -497,11 +469,11 @@ def main() -> int:
 
     try:
         ventana = VentanaPrincipal(ctx)
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.exception("La ventana principal no pudo abrirse")
         cerrar_splash()
         if actualizacion_de_rescate(db):
-            candado.unlock()           # el diálogo ya descargó, reemplazó el .exe y lanzó la versión nueva
+            candado.unlock()
             return 0
         raise
     cerrar_splash()

@@ -1,9 +1,6 @@
 @echo off
-REM ==========================================================================
-REM  PUBLICAR_ACTUALIZACION.bat - Compila y firma una nueva version para
-REM  que todos los POS instalados se actualicen solos.
-REM  Antes: suba APP_VERSION en config.py (ej. 1.0.0 -> 1.1.0)
-REM ==========================================================================
+REM Publicacion manual de una version firmada
+REM Antes: suba APP_VERSION en config.py (ej. 1.0.0 -> 1.1.0)
 chcp 65001 >nul
 cd /d "%~dp0"
 call ".venv\Scripts\activate.bat"

@@ -1,22 +1,3 @@
-"""
-publicar_actualizacion.py — Prepara una actualización remota firmada (se usa en el PC de desarrollo).
-
-UNA SOLA VEZ (antes de la primera compilación):
-    python publicar_actualizacion.py --generar-claves
-      -> claves_privadas/actualizacion_ed25519.pem   (SECRETA: guárdela en USB/nube privada)
-      -> assets/clave_publica_actualizaciones.pem      (va dentro del .exe)
-
-CADA NUEVA VERSIÓN:
-    1. Suba APP_VERSION en config.py (p. ej. "1.1.0").
-    2. python build_app.py
-    3. python publicar_actualizacion.py --notas "Qué cambió"
-       -> publicar/ConfeccionesR4.exe  +  publicar/latest.json (firmado)
-    4. Suba ambos archivos a un "release" de GitHub (o cualquier hosting HTTPS):
-         gh release create v1.1.0 publicar/ConfeccionesR4.exe publicar/latest.json
-       y en el POS (Ajustes › Actualizaciones) deje la URL:
-         https://github.com/USUARIO/REPO/releases/latest/download/latest.json
-       Todos los POS instalados se actualizarán solos al abrir (o con "Buscar actualizaciones").
-"""
 from __future__ import annotations
 
 import argparse
@@ -31,8 +12,8 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent
 sys.path.insert(0, str(RAIZ))
 
-import config as cfg  # noqa: E402
-from updater import ARCHIVO_CLAVE, mensaje_firmado, verificar_firma  # noqa: E402
+import config as cfg
+from updater import ARCHIVO_CLAVE, mensaje_firmado, verificar_firma
 
 PRIVADA = RAIZ / "claves_privadas" / "actualizacion_ed25519.pem"
 PUBLICA = RAIZ / "assets" / ARCHIVO_CLAVE
@@ -58,14 +39,12 @@ def generar_claves(forzar: bool) -> None:
 
 
 def clave_desde_entorno(variable: str) -> None:
-    """GitHub Actions: la clave privada viene de un secreto; se escribe solo durante la compilación
-    y se deriva la clave pública que irá dentro del .exe."""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
     texto = os.environ.get(variable, "").strip()
     if not texto:
         sys.exit(f"Falta el secreto {variable} (Settings › Secrets and variables › Actions).")
-    if "BEGIN" not in texto:                       # admite el PEM en una sola línea (base64)
+    if "BEGIN" not in texto:
         texto = base64.b64decode(texto).decode()
     clave = load_pem_private_key(texto.encode(), password=None)
     PRIVADA.parent.mkdir(exist_ok=True)
@@ -87,7 +66,7 @@ def publicar(exe: Path, notas: str, url: str, salida: Path) -> None:
                   "sha256": hashlib.sha256(datos).hexdigest(), "tamano": len(datos), "notas": notas}
     clave = load_pem_private_key(PRIVADA.read_bytes(), password=None)
     manifiesto["firma"] = base64.b64encode(clave.sign(mensaje_firmado(manifiesto))).decode()
-    verificar_firma(manifiesto, PUBLICA.read_bytes())          # auto-comprobación
+    verificar_firma(manifiesto, PUBLICA.read_bytes())
     salida.mkdir(exist_ok=True)
     shutil.copy2(exe, salida / exe.name)
     (salida / "latest.json").write_text(json.dumps(manifiesto, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -98,7 +77,7 @@ def publicar(exe: Path, notas: str, url: str, salida: Path) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description="Firma y publica una actualización de ConfeccionesR4 POS.")
     ap.add_argument("--generar-claves", action="store_true")
     ap.add_argument("--forzar", action="store_true")
     ap.add_argument("--exe", default=str(RAIZ / "dist" / "ConfeccionesR4" / "ConfeccionesR4.exe"))

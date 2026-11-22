@@ -1,15 +1,13 @@
-# ConfeccionesR4 POS — dependencias (solo en el PC de DESARROLLO / compilación)
-# El PC del cliente NO necesita instalar nada: todo queda dentro del instalador.
-PySide6>=6.6,<6.11          # UI nativa + Qt Charts
-openpyxl>=3.1               # Exportación Excel con formato ejecutivo
-pandas>=2.1                 # Lectura de .xls/.ods en la importación masiva
-xlrd>=2.0                   # Soporte .xls antiguo para pandas
-odfpy>=1.4                  # Soporte .ods para pandas
-Pillow>=10.1                # Composición de etiquetas
-python-barcode>=0.15        # Codificación EAN-13 / Code128
-python-escpos>=3.1          # (Opcional) transporte USB directo
-pywin32>=306; sys_platform == "win32"   # win32print / win32ui: impresión RAW y GDI
-cryptography>=42           # Firma Ed25519 de las actualizaciones remotas
-truststore>=0.9            # HTTPS verificado con los certificados de Windows
-certifi>=2024.2            # Certificados de Mozilla (respaldo)
-pyinstaller>=6.10           # Empaquetado (un solo .exe); >=6.9 trae PYINSTALLER_RESET_ENVIRONMENT
+PySide6>=6.6,<6.11
+openpyxl>=3.1
+pandas>=2.1
+xlrd>=2.0
+odfpy>=1.4
+Pillow>=10.1
+python-barcode>=0.15
+python-escpos>=3.1
+pywin32>=306; sys_platform == "win32"
+cryptography>=42
+truststore>=0.9
+certifi>=2024.2
+pyinstaller>=6.10

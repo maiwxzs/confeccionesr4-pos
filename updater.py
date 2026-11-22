@@ -1,26 +1,3 @@
-"""
-updater.py — Actualización remota segura de ConfeccionesR4 POS.
-
-Flujo
------
-1. El POS descarga por HTTPS un manifiesto pequeño (``latest.json``) desde la URL configurada
-   (p. ej. un *release* de GitHub). Ejemplo::
-
-       {"version": "1.1.0", "url": "ConfeccionesR4.exe", "sha256": "...", "tamano": 98304512,
-        "notas": "Mejoras en el historial", "firma": "<base64>"}
-
-2. Verifica la FIRMA Ed25519 del manifiesto con la clave pública empaquetada en el programa
-   (assets/clave_publica_actualizaciones.pem). Sin firma válida no se descarga nada: aunque
-   alguien tome control del sitio de descargas, no puede instalar un programa falso.
-3. Descarga el nuevo .exe, comprueba tamaño y SHA-256.
-4. Renombra el .exe en uso a ``ConfeccionesR4.old.exe`` (Windows lo permite aunque esté
-   abierto), pone el nuevo en su lugar y reinicia. Al siguiente arranque borra el .old.
-   Si la carpeta no es escribible, pide permiso de administrador una sola vez (UAC).
-
-Los datos (C:\\ProgramData\\ConfeccionesR4) nunca se tocan; si la nueva versión trae cambios de
-base de datos, ``database.py`` migra automáticamente (con respaldo previo).
-El POS sigue funcionando 100 % sin internet: si no hay conexión, simplemente no se actualiza.
-"""
 from __future__ import annotations
 
 import base64
@@ -57,9 +34,7 @@ class InfoActualizacion:
     notas: str
 
 
-# --------------------------------------------------------------------------- #
 # Utilidades
-# --------------------------------------------------------------------------- #
 def version_tupla(v: str) -> tuple[int, ...]:
     partes = []
     for p in str(v).strip().lstrip("vV").split("."):
@@ -69,13 +44,11 @@ def version_tupla(v: str) -> tuple[int, ...]:
 
 
 def mensaje_firmado(manifiesto: dict) -> bytes:
-    """Texto canónico que se firma/verifica (mismo algoritmo en publicar_actualizacion.py)."""
     datos = {k: manifiesto.get(k) for k in CAMPOS_FIRMADOS}
     return json.dumps(datos, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def url_efectiva(url_configurada: str | None) -> str:
-    """La URL escrita en Ajustes manda; si está vacía se usa la integrada al compilar."""
     return (url_configurada or "").strip() or cfg.URL_ACTUALIZACIONES
 
 
@@ -102,25 +75,16 @@ def verificar_firma(manifiesto: dict, pem: bytes | None = None) -> None:
 
 
 def _contextos_ssl():
-    """
-    Contextos TLS a probar, en orden. NUNCA se desactiva la verificación del certificado:
-      1. truststore: verifica con el almacén de certificados de WINDOWS (igual que el navegador;
-         Windows descarga solo los certificados raíz/intermedios que falten).
-      2. certifi: lista oficial de certificados de Mozilla empaquetada en el programa.
-      3. Contexto estándar de Python.
-    Así se evita el error CERTIFICATE_VERIFY_FAILED en equipos con certificados desactualizados
-    o con antivirus que inspeccionan HTTPS.
-    """
     import ssl
     try:
         import truststore
         yield "windows", truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     try:
         import certifi
         yield "certifi", ssl.create_default_context(cafile=certifi.where())
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     yield "python", ssl.create_default_context()
 
@@ -131,11 +95,11 @@ def _abrir(url: str, timeout: int = 10):
     ultimo: Exception | None = None
     for _nombre, ctx in _contextos_ssl():
         try:
-            return urllib.request.urlopen(req, timeout=timeout, context=ctx)  # noqa: S310
+            return urllib.request.urlopen(req, timeout=timeout, context=ctx)
         except urllib.error.URLError as e:
             if isinstance(getattr(e, "reason", None), ssl.SSLError) or "CERTIFICATE" in str(e).upper():
                 ultimo = e
-                continue                         # probar con el siguiente almacén de certificados
+                continue
             raise
         except ssl.SSLError as e:
             ultimo = e
@@ -146,11 +110,8 @@ def _abrir(url: str, timeout: int = 10):
         f"Detalle: {ultimo}")
 
 
-# --------------------------------------------------------------------------- #
 # API
-# --------------------------------------------------------------------------- #
 def buscar(url_manifiesto: str, version_actual: str = cfg.APP_VERSION) -> InfoActualizacion | None:
-    """Devuelve la actualización disponible (ya verificada) o None si está al día."""
     url_manifiesto = (url_manifiesto or "").strip()
     if not url_manifiesto.lower().startswith("https://"):
         raise ErrorActualizacion("La URL de actualizaciones debe empezar por https://")
@@ -168,7 +129,6 @@ def buscar(url_manifiesto: str, version_actual: str = cfg.APP_VERSION) -> InfoAc
 
 def descargar(info: InfoActualizacion, progreso: Callable[[int, int], None] | None = None,
               carpeta: Path | None = None) -> Path:
-    """Descarga y valida (tamaño + SHA-256) el nuevo ejecutable. Devuelve su ruta."""
     carpeta = carpeta or Path(tempfile.gettempdir())
     destino = carpeta / f"ConfeccionesR4_{info.version}.descarga"
     h = hashlib.sha256()
@@ -198,8 +158,6 @@ def ejecutable_actual() -> Path:
 
 
 def _reintentar(accion, intentos: int = 24, espera: float = 0.5) -> None:
-    """Windows Defender/antivirus suele bloquear unos segundos el .exe recién descargado, y el
-    programa anterior puede tardar en soltar su archivo: se reintenta ~12 s antes de rendirse."""
     for i in range(intentos):
         try:
             accion()
@@ -214,19 +172,17 @@ def _nombre_viejo(exe: Path) -> Path:
     viejo = exe.with_name(exe.stem + ".old.exe")
     try:
         viejo.unlink(missing_ok=True)
-    except OSError:                          # sigue en uso: usar otro nombre (se borra al iniciar)
+    except OSError:
         viejo = exe.with_name(f"{exe.stem}.old-{int(time.time())}.exe")
     return viejo
 
 
 def aplicar(nuevo: Path) -> None:
-    """Reemplaza el .exe en uso y lanza la nueva versión. Quien llama debe cerrar la app.
-    Nunca deja el programa sin su .exe: ante cualquier fallo se restaura el anterior."""
     exe = ejecutable_actual()
     viejo = _nombre_viejo(exe)
     renombrado = False
     try:
-        _reintentar(lambda: os.replace(exe, viejo))   # Windows permite renombrar un .exe en ejecución
+        _reintentar(lambda: os.replace(exe, viejo))
         renombrado = True
 
         def poner_nuevo():
@@ -234,7 +190,7 @@ def aplicar(nuevo: Path) -> None:
                 os.replace(nuevo, exe)
             except PermissionError:
                 raise
-            except OSError:                  # otra unidad: copiar
+            except OSError:
                 import shutil
                 shutil.copy2(nuevo, exe)
                 nuevo.unlink(missing_ok=True)
@@ -242,7 +198,7 @@ def aplicar(nuevo: Path) -> None:
     except PermissionError:
         if renombrado and not exe.exists():
             try:
-                os.replace(viejo, exe)       # deshacer: el programa sigue intacto
+                os.replace(viejo, exe)
             except OSError:
                 pass
         _aplicar_como_administrador(nuevo, exe)
@@ -255,13 +211,6 @@ def aplicar(nuevo: Path) -> None:
 
 
 def entorno_limpio() -> dict[str, str]:
-    """
-    Entorno para lanzar OTRA instancia del .exe de un solo archivo.
-    Sin esto, la instancia nueva hereda las variables internas de PyInstaller y reutiliza la
-    carpeta temporal (_MEI…) de la instancia vieja; cuando la vieja se cierra, Windows borra esa
-    carpeta y la nueva falla con «No module named numpy._core…» / «WinError 3».
-    PYINSTALLER_RESET_ENVIRONMENT=1 es el mecanismo oficial de PyInstaller (>= 6.9) para evitarlo.
-    """
     env = {k: v for k, v in os.environ.items()
            if not k.upper().startswith(("_PYI", "_MEIPASS")) and k.upper() not in ("TCL_LIBRARY", "TK_LIBRARY")}
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
@@ -269,14 +218,13 @@ def entorno_limpio() -> dict[str, str]:
 
 
 def relanzar(exe: Path | str | None = None, args: list[str] | None = None) -> None:
-    """Inicia una instancia nueva e independiente del programa (tras actualizar o reiniciar datos)."""
     exe = Path(exe or sys.executable)
     flags = 0
     if sys.platform == "win32":
-        flags = 0x00000008 | 0x00000200      # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        flags = 0x00000008 | 0x00000200
     if getattr(sys, "frozen", False):
         cmd = [str(exe)] + list(args or [])
-    else:                                    # desarrollo: python main.py
+    else:
         cmd = [sys.executable, str(Path(__file__).with_name("main.py"))] + list(args or [])
     subprocess.Popen(cmd, close_fds=True, creationflags=flags, cwd=str(exe.parent), env=entorno_limpio())
 
@@ -286,7 +234,6 @@ def _lanzar(exe: Path) -> None:
 
 
 def _aplicar_como_administrador(nuevo: Path, exe: Path) -> None:
-    """Sin permiso de escritura: el nuevo .exe se ejecuta elevado (UAC) en modo instalador."""
     import ctypes
     args = f'--aplicar-actualizacion "{exe}" {os.getpid()}'
     r = ctypes.windll.shell32.ShellExecuteW(None, "runas", str(nuevo), args, None, 1)
@@ -299,12 +246,11 @@ def _aplicar_como_administrador(nuevo: Path, exe: Path) -> None:
 
 
 def modo_aplicar_desde_argv(argv: list[str]) -> bool:
-    """Ejecutado por el .exe NUEVO con privilegios: espera a que cierre el viejo y lo reemplaza."""
     if "--aplicar-actualizacion" not in argv:
         return False
     i = argv.index("--aplicar-actualizacion")
     destino = Path(argv[i + 1])
-    for _ in range(60):                      # hasta 30 s esperando que el programa viejo cierre
+    for _ in range(60):
         try:
             if destino.exists():
                 os.replace(destino, _nombre_viejo(destino))
@@ -318,13 +264,11 @@ def modo_aplicar_desde_argv(argv: list[str]) -> bool:
             break
         except OSError:
             time.sleep(0.5)
-    # Relanzar SIN privilegios de administrador (a través del Explorador) y con entorno limpio
     subprocess.Popen(["explorer.exe", str(destino)], env=entorno_limpio())
     return True
 
 
 def limpiar_restos() -> None:
-    """Borra el .exe anterior y descargas a medias (se llama al iniciar)."""
     try:
         exe = ejecutable_actual()
     except ErrorActualizacion:
@@ -341,10 +285,7 @@ def limpiar_restos() -> None:
             pass
 
 
-# --------------------------------------------------------------------------- #
-# Diálogo (Qt) — importado solo cuando se usa
-# --------------------------------------------------------------------------- #
-def DialogoActualizacion(info: InfoActualizacion, parent=None):  # noqa: N802
+def DialogoActualizacion(info: InfoActualizacion, parent=None):
     from PySide6.QtCore import QObject, Signal, Slot
     from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QVBoxLayout
 
@@ -382,7 +323,7 @@ def DialogoActualizacion(info: InfoActualizacion, parent=None):  # noqa: N802
             self.estado.setText("Firma y archivo verificados. Instalando y reiniciando…")
             try:
                 aplicar(Path(ruta))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 error(self, f"No se pudo aplicar la actualización:\n{e}")
                 self.reject()
                 return

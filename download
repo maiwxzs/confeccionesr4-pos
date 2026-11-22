@@ -1,0 +1,23 @@
+# Nunca subir la clave privada de firma de actualizaciones
+claves_privadas/
+.venv/
+build/
+dist/
+publicar/
+installer_output/
+redist/
+__pycache__/
+*.db
+assets/build_info.json
+assets/clave_publica_actualizaciones.pem
+
+# Datos reales de la tienda: nunca al repositorio
+ejemplos/
+*.xlsx
+*.xls
+*.csv
+*.pdf
+*.db-wal
+*.db-shm
+respaldos/
+logs/

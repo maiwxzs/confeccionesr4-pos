@@ -1,23 +1,11 @@
-; =============================================================================
-;  installer_setup.iss — Instalador de ConfeccionesR4 POS (Inno Setup 6.2+)
-;
-;  Requisito: haber ejecutado antes  `python build_app.py`
-;             (genera UN solo archivo: dist\ConfeccionesR4\ConfeccionesR4.exe).
-;  Opcional:  `python build_app.py --vcredist` deja redist\vc_redist.x64.exe y el
-;             instalador lo ejecuta en silencio SOLO si el PC no tiene el runtime de C++.
-;
-;  Compilar:  ISCC.exe installer_setup.iss   (o abrir en Inno Setup › Build › Compile)
-;  Resultado: installer_output\Instalador_ConfeccionesR4_v1.0.exe
-; =============================================================================
+; ConfeccionesR4 POS · Inno Setup 6.2+
 
 #define MyAppName      "ConfeccionesR4 POS"
-; GitHub Actions pasa la version con /DMyAppVersion=1.0.<n>
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
 #endif
-#define MyAppPublisher "CONFECCIONESR4"
+#define MyAppPublisher "maiwxzs"
 #define MyAppExeName   "ConfeccionesR4.exe"
-#define MyAppURL       "https://wa.me/573028694690"
 #define SourceDir      "dist\ConfeccionesR4"
 
 #if !FileExists(AddBackslash(SourcePath) + SourceDir + "\" + MyAppExeName)
@@ -32,11 +20,9 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-AppPublisherURL={#MyAppURL}
-AppSupportURL={#MyAppURL}
-AppCopyright=CONFECCIONESR4 · NIT 700571557-9 · Bogotá D.C.
+AppCopyright=© 2026 maiwxzs · Hecho para Confecciones R4
 VersionInfoVersion={#MyAppVersion}
-VersionInfoCompany={#MyAppPublisher}
+VersionInfoCompany=Confecciones R4
 VersionInfoDescription=Instalador de {#MyAppName}
 DefaultDirName={autopf}\ConfeccionesR4
 DefaultGroupName={#MyAppName}
@@ -71,13 +57,9 @@ spanish.EjecutarAhora=Ejecutar ConfeccionesR4 POS ahora
 spanish.InstalandoVC=Instalando componentes de Microsoft Visual C++ (puede tardar un minuto)...
 
 [Tasks]
-; Marcado por defecto: el usuario solo pulsa "Siguiente"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Dirs]
-; Permiso de modificación para usuarios estándar:
-;  - {app}: las actualizaciones remotas reemplazan el .exe sin pedir administrador
-;  - ProgramData: base de datos compartida por todos los usuarios de Windows del equipo
 Name: "{app}"; Permissions: users-modify
 Name: "{commonappdata}\ConfeccionesR4"; Permissions: users-modify; Flags: uninsneveruninstall
 
@@ -92,19 +74,15 @@ Source: "redist\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall;
 ; Grupo en el Menú Inicio
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\logo_r4.ico"; Comment: "Punto de venta e inventario"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-; Acceso directo en el Escritorio con el ícono corporativo
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\logo_r4.ico"; Tasks: desktopicon
 
 [Run]
 #if IncluirVCRedist
-; Dependencia runtime instalada en silencio, sin intervención del operador
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "{cm:InstalandoVC}"; Flags: waituntilterminated runhidden; Check: NecesitaVCRedist
 #endif
-; Casilla final:  [X] Ejecutar ConfeccionesR4 POS ahora
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:EjecutarAhora}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallDelete]
-; Solo archivos del programa. Las ventas y el inventario (C:\ProgramData\ConfeccionesR4) NO se borran.
 Type: files; Name: "{app}\ConfeccionesR4.old.exe"
 
 [Code]

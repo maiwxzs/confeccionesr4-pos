@@ -1,8 +1,5 @@
 @echo off
-REM ==========================================================================
-REM  COMPILAR.bat - Genera ConfeccionesR4.exe (UN solo archivo) y el instalador
-REM  Requisitos en el PC de desarrollo: Python 3.11+ (64 bits) e Inno Setup 6
-REM ==========================================================================
+REM Requiere: Python 3.11+ (64 bits) e Inno Setup 6
 chcp 65001 >nul
 cd /d "%~dp0"
 

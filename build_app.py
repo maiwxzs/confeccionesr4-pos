@@ -1,26 +1,3 @@
-"""
-build_app.py — Compilación automatizada de ConfeccionesR4 POS para Windows.
-
-Uso (en el PC de DESARROLLO con Windows 10/11 x64 y Python 3.11+):
-
-    python build_app.py                       # UN SOLO archivo: dist/ConfeccionesR4/ConfeccionesR4.exe
-    python build_app.py --instalar-deps       # instala requirements.txt antes de compilar
-    python build_app.py --vcredist            # descarga vc_redist.x64.exe para el instalador
-    python build_app.py --instalador          # además compila el instalador con Inno Setup
-    python build_app.py --carpeta             # modo carpeta (--onedir), solo para depurar
-
-Pasos:
-  1. Verifica entorno y dependencias.
-  2. Genera una base de datos LIMPIA (esquema + datos fiscales) que se empaqueta en data/.
-  3. Escribe la ficha de versión del .exe (propiedades de Windows).
-  4. Ejecuta PyInstaller --onefile: UN .exe autocontenido con Python runtime, Qt, pywin32,
-     DLL de Visual C++, ícono, base de datos limpia y pantalla de carga (--splash).
-     --windowed (sin consola) e --icon=assets/logo_r4.ico.
-  5. (modo carpeta) Copia los DLL de Visual C++ junto al .exe.
-  6. (Opcional) Compila installer_setup.iss con ISCC.exe → Instalador_ConfeccionesR4_v1.0.exe.
-
-El PC del cliente NO necesita Python, pip ni nada adicional.
-"""
 from __future__ import annotations
 
 import argparse
@@ -36,7 +13,7 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent
 sys.path.insert(0, str(RAIZ))
 
-import config as cfg  # noqa: E402
+import config as cfg
 
 NOMBRE = "ConfeccionesR4"
 ICONO = RAIZ / "assets" / "logo_r4.ico"
@@ -45,7 +22,6 @@ BUILD = RAIZ / "build"
 TMP_DATA = BUILD / "_datos_empaquetados"
 VCREDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 
-# Módulos que NO se usan: reducen ~150 MB el paquete final y aceleran el arranque
 EXCLUIR = [
     "tkinter", "matplotlib", "scipy", "IPython", "jupyter", "notebook", "pytest", "sphinx",
     "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtWebEngineQuick",
@@ -64,7 +40,6 @@ OCULTOS = ["win32print", "win32ui", "win32con", "win32timezone", "PySide6.QtChar
            "openpyxl.cell._writer", "barcode", "barcode.writer", "escpos", "escpos.printer",
            "cryptography.hazmat.primitives.asymmetric.ed25519",
            "cryptography.hazmat.primitives.serialization", "truststore", "certifi",
-           # módulos propios que se cargan bajo demanda (v1.1)
            "nube", "ticket_pdf", "ui.cajon", "ui.pagos", "ui.separados_view", "ui.cambio_view",
            "ui.conteo_view", "ui.reportes_view", "ui.asistente", "ui.seguridad"]
 DLLS_VC = ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll",
@@ -106,7 +81,6 @@ def verificar_entorno(instalar: bool) -> None:
 
 
 def escribir_build_info(version: str | None, url: str | None) -> None:
-    """Fija versión y URL de actualizaciones dentro del .exe (assets/build_info.json)."""
     destino = RAIZ / "assets" / "build_info.json"
     info = {}
     if destino.exists():
@@ -143,11 +117,11 @@ VSVersionInfo(
                     fileType=0x1, subtype=0x0, date=(0, 0)),
   kids=[
     StringFileInfo([StringTable('240A04B0', [
-      StringStruct('CompanyName', 'CONFECCIONESR4 - NIT 700571557-9'),
+      StringStruct('CompanyName', 'Confecciones R4'),
       StringStruct('FileDescription', '{cfg.APP_NAME} - Punto de Venta e Inventario'),
       StringStruct('FileVersion', '{cfg.APP_VERSION}'),
       StringStruct('InternalName', '{NOMBRE}'),
-      StringStruct('LegalCopyright', 'CONFECCIONESR4 - Bogotá D.C.'),
+      StringStruct('LegalCopyright', '© 2026 maiwxzs · Hecho para Confecciones R4'),
       StringStruct('OriginalFilename', '{NOMBRE}.exe'),
       StringStruct('ProductName', '{cfg.APP_NAME}'),
       StringStruct('ProductVersion', '{cfg.APP_VERSION}')])]),
@@ -162,11 +136,8 @@ VSVersionInfo(
 
 
 def _hay_tk() -> bool:
-    try:
-        import tkinter  # noqa: F401  (PyInstaller lo necesita para la pantalla de carga)
-        return True
-    except ImportError:
-        return False
+    import importlib.util
+    return importlib.util.find_spec("tkinter") is not None
 
 
 def ejecutar_pyinstaller(onefile: bool, version: Path) -> None:
@@ -177,18 +148,17 @@ def ejecutar_pyinstaller(onefile: bool, version: Path) -> None:
         str(RAIZ / "main.py"),
         "--name", NOMBRE,
         "--noconfirm", "--clean",
-        "--windowed",                         # = --noconsole: oculta la consola negra
+        "--windowed",
         f"--icon={ICONO}",
         "--onefile" if onefile else "--onedir",
-        # Salida: dist/ConfeccionesR4/ConfeccionesR4.exe (un solo archivo)
         "--distpath", str(DIST / NOMBRE if onefile else DIST),
         "--workpath", str(BUILD / "pyinstaller"), "--specpath", str(BUILD),
         "--add-data", f"{RAIZ / 'assets'}{sep}assets",
         "--add-data", f"{TMP_DATA}{sep}data",
-        "--collect-data", "barcode",          # fuentes internas de python-barcode
-        "--collect-data", "certifi",          # cacert.pem para HTTPS de las actualizaciones
+        "--collect-data", "barcode",
+        "--collect-data", "certifi",
         "--version-file", str(version),
-        "--noupx",                            # UPX dispara falsos positivos de antivirus
+        "--noupx",
     ]
     if splash:
         args += ["--splash", str(RAIZ / "assets" / "splash.png")]
@@ -205,7 +175,6 @@ def ejecutar_pyinstaller(onefile: bool, version: Path) -> None:
 
 
 def copiar_runtime_vc(onefile: bool) -> None:
-    """Copia los DLL de Visual C++ junto al .exe si PyInstaller no los incluyó."""
     if sys.platform != "win32" or onefile:
         return
     destino = DIST / NOMBRE / "_internal"

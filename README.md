@@ -1,211 +1,75 @@
-# ConfeccionesR4 POS v1.0
+<div align="center">
 
-Punto de Venta, Historial de Documentos, Inventario, Cierre de Caja y Dashboard para
-**CONFECCIONESR4** (Bogotá). Aplicación de escritorio nativa (PySide6 + SQLite), tema oscuro,
-100 % offline y entregada como **un solo archivo `ConfeccionesR4.exe`**: el PC del cliente no
-necesita Python, pip ni consola.
+<img src="assets/logo_r4.png" width="96" alt="Confecciones R4">
+
+# ConfeccionesR4 POS
+
+**Sistema de punto de venta desarrollado a la medida para Confecciones R4**
+
+Aplicación de escritorio para Windows · 100 % offline · un solo ejecutable
+
+</div>
 
 ---
 
-## Novedades de la versión 1.1
+ConfeccionesR4 POS reúne en un solo programa la operación diaria de la tienda: venta en
+mostrador, inventario con etiquetas de código de barras, separados con abonos, cambios de prenda,
+caja con arqueo ciego, reportes de gestión y un historial de documentos que no se puede alterar.
 
-- **Pago mixto** (botón «Mixto»): parte en efectivo y parte por Nequi, Bre-B o datáfono, con cambio.
-- **Bre-B** reemplaza a Daviplata (las ventas antiguas con Daviplata se conservan en reportes y cierres).
-- **Cambio de prenda en un paso** (Documentos › Cambio de prenda): devuelve, se lleva otra y paga o recibe la diferencia.
-- **Separados con abonos** (Vender › SEPARAR o F7, y módulo Separados): reserva la ropa, abonos por cualquier medio, entrega y anulación con devolución parcial.
-- **Cajón monedero trazable**: cada apertura queda registrada (venta, devolución, abono, cambio o manual con motivo) y sale en el cierre.
-- **Conteo físico con escáner** (Inventario › Conteo físico): compara con el sistema y ajusta con motivo.
-- **Reportes de gestión**: mercancía quieta, ventas por categoría/talla/color/marca, comparativo mensual y sugerido de compra (en pantalla y a Excel).
-- **«Imprimir tiquete»** opcional al cobrar (la venta y su PDF se guardan igual).
-- **Respaldo automático en Google Drive** y **resumen del cierre al celular** (WhatsApp o Telegram) — Ajustes › Nube y celular.
-- Tiquete con el nombre de la tienda en la **misma letra cursiva** de las etiquetas.
-- Versión **1.1.x**: el número sale del archivo `VERSION` (1.1) más la cantidad de cambios publicados.
+Es un software **de uso exclusivo de Confecciones R4**. No es un producto comercial ni está
+pensado para instalarse en otros negocios.
 
-## 1. Estructura del proyecto
+## Funciones principales
 
-```
-ConfeccionesR4_POS/
-├── main.py                    Punto de entrada: ventana, barra lateral animada, instancia única
-├── config.py                  Rutas, datos fiscales por defecto, formato $ COP
-├── database.py                SQLite v3: ventas, historial, devoluciones, auditoría, migraciones
-├── excel_engine.py            Importación inteligente + exportación con formato ejecutivo
-├── printer_engine.py          ESC/POS directo Jaltech 80/58 mm (win32print RAW, USB, red)
-├── barcode_engine.py          Etiquetas Code128 / EAN-13 a 203 dpi
-├── updater.py                 Actualización remota con firma digital Ed25519
-├── publicar_actualizacion.py  Genera claves y firma cada nueva versión
-├── ui/
-│   ├── theme.py               Tema oscuro (QSS)
-│   ├── animations.py          Transiciones, contadores, pulsos, destellos, diálogos animados
-│   ├── widgets.py             Bus de eventos, campo $ COP, KPI, toasts, hilos de impresión
-│   ├── dashboard_view.py      MÓDULO 5 · Dashboard (primera pantalla)
-│   ├── pos_view.py            MÓDULO 1 · Punto de venta
-│   ├── history_view.py        MÓDULO 2 · Historial de documentos y trazabilidad
-│   ├── inventory_view.py      MÓDULO 3 · Inventario + etiquetas
-│   ├── cash_view.py           MÓDULO 4 · Apertura, arqueo ciego y cierre
-│   └── settings_dialog.py     Ajustes (empresa/DIAN, impresoras, etiquetas, datos, actualizaciones)
-├── assets/                    Ícono, splash, imágenes del instalador
-├── ejemplos/                  Tiquetes, devolución, etiquetas y reportes generados por el sistema
-├── build_app.py               PyInstaller automatizado (un solo .exe)
-├── installer_setup.iss        Instalador Inno Setup
-├── .github/workflows/         Compilación y publicación automáticas (GitHub Actions)
-├── COMPILAR.bat               Alternativa: compilar en su PC
-└── PUBLICAR_ACTUALIZACION.bat Alternativa: publicar a mano
-```
-
-## 2. Todo automático (recomendado): GitHub compila, publica y actualiza
-
-No necesita instalar Python ni Inno Setup. GitHub Actions (gratis) compila en la nube.
-
-**Configuración (una sola vez, desde el navegador):**
-1. Entre a github.com (cree la cuenta si no tiene) → **New repository** → nombre
-   `confeccionesr4-pos` → **Public** → *Create repository*.
-2. En el repositorio: **Settings › Secrets and variables › Actions › New repository secret**
-   - Name: `FIRMA_ACTUALIZACIONES`
-   - Secret: pegue el contenido completo del archivo `FIRMA_ACTUALIZACIONES.txt`
-     (guarde ese archivo en un lugar seguro y no lo comparta).
-3. Pestaña **Code › uploading an existing file**: arrastre TODO el contenido de esta carpeta
-   (incluida la carpeta `.github`) → *Commit changes*.
-   Si la carpeta `.github` no subió: *Add file › Create new file*, nombre
-   `.github/workflows/compilar-y-publicar.yml`, pegue el contenido de ese archivo y guarde.
-4. Pestaña **Actions**: verá "Compilar y publicar" trabajando (≈ 10-15 min).
-5. Pestaña **Releases**: descargue **`Instalador_ConfeccionesR4_v1.0.exe`** e instálelo en la tienda.
-   Enlace fijo para descargarlo siempre:
-   `https://github.com/USUARIO/confeccionesr4-pos/releases/latest/download/Instalador_ConfeccionesR4_v1.0.exe`
-
-**Desde ese momento, todo es automático:**
-- Cualquier cambio que suba al repositorio → GitHub compila la versión `1.0.<n>`, la firma y la publica.
-- Cada POS instalado revisa al abrir y cada 3 horas; si hay versión nueva **se instala sola**
-  (nunca durante una venta) y se reinicia. La URL viene integrada en el programa.
-- Para publicar sin cambiar código: *Actions › Compilar y publicar › Run workflow*.
-
-**En la tienda, también automático:** detecta la impresora térmica, ofrece importar el
-inventario la primera vez, hace respaldo diario y migra la base de datos en cada versión.
-
-### Alternativa: compilar en su propio PC
-Python 3.12 (64 bits, *Add to PATH*) + Inno Setup 6 → doble clic en **`COMPILAR.bat`**.
-Resultado: `dist\ConfeccionesR4\ConfeccionesR4.exe` (un solo archivo) e
-`installer_output\Instalador_ConfeccionesR4_v1.0.exe`. Para actualizar a mano: vuelva a compilar
-e instale encima (los datos se conservan).
-
-## 3. Dónde se guarda todo
-
-| Qué | Dónde |
+| Módulo | Qué hace |
 |---|---|
-| Programa | `C:\Program Files\ConfeccionesR4\ConfeccionesR4.exe` |
-| Base de datos (ventas, inventario, caja, historial, auditoría) | `C:\ProgramData\ConfeccionesR4\confeccionesr4.db` |
-| Respaldos automáticos (diario + al cerrar caja/salir; últimos 30) | `C:\ProgramData\ConfeccionesR4\respaldos\` |
-| Registro de errores | `C:\ProgramData\ConfeccionesR4\logs\` |
-| Reportes de Excel exportados | `Documentos\ConfeccionesR4 Reportes\` |
-| Copia PDF de cada tiquete y devolución | `Documentos\ConfeccionesR4 Tiquetes\AAAA\MM\` |
+| **Dashboard** | Ventas netas, utilidad, métodos de pago y prendas más vendidas del día y del mes |
+| **Vender** | Escaneo, búsqueda, descuentos, pago en efectivo, Nequi, Bre-B, datáfono o mixto |
+| **Documentos** | Historial de tiquetes, reimpresión, devoluciones parciales, anulaciones y cambios de prenda |
+| **Separados** | Reserva de prendas con abonos, entrega y anulación con devolución |
+| **Inventario** | Productos, importación/exportación Excel, etiquetas, conteo físico con escáner |
+| **Caja** | Apertura, entradas y salidas, aperturas de cajón, arqueo ciego y cierre interno |
+| **Reportes de gestión** | Mercancía quieta, ventas por categoría/talla/color/marca, comparativo y sugerido de compra |
+| **Ajustes** | Empresa, impresoras, etiquetas, seguridad, datos, nube y actualizaciones |
 
-Actualizar o desinstalar el programa **no borra** los datos.
+## Requisitos
 
-## 4. Seguridad de las actualizaciones
+- Windows 10 u 11 de 64 bits.
+- Impresora térmica de 80 o 58 mm (tiquetes) y, opcionalmente, impresora de etiquetas.
+- Lector de código de barras USB (funciona como teclado).
+- Conexión a internet solo para actualizaciones y respaldo en la nube; la venta no la necesita.
 
-Cada versión se firma (Ed25519) con el secreto `FIRMA_ACTUALIZACIONES`; el POS solo instala
-archivos con firma válida y SHA-256 correcto, y si algo falla restaura el .exe anterior.
-Si pierde la clave, genere otra y reinstale una vez los equipos con el instalador nuevo.
-Ajustes › Actualizaciones permite desactivar la instalación automática o buscar manualmente.
+## Instalación rápida
 
-## 5. Impresora Jaltech
+1. Descargar `Instalador_ConfeccionesR4_v1.0.exe` desde la sección **Releases**.
+2. Ejecutarlo en el equipo de la tienda y seguir el asistente.
+3. En el primer inicio, el asistente de configuración guía en cinco pasos: datos del negocio,
+   numeración de los tiquetes, cajero, impresora e inventario inicial.
 
-1. Instale el driver de Jaltech; verifique que aparezca en *Configuración › Impresoras*.
-2. *Ajustes › Impresora de tiquetes* → Conexión *Windows*, elija la impresora, ancho 80/58 mm
-   → **Imprimir página de prueba**. Si las tildes salen mal, cambie la *Tabla de caracteres*.
-3. El cajón monedero abre solo en ventas y devoluciones en efectivo.
+Si Windows muestra una advertencia de SmartScreen: **Más información › Ejecutar de todas formas**.
 
-Etiquetas: *Ajustes › Etiquetas* ("Driver de Windows" sirve con cualquier impresora; "TSPL"
-para impresoras de etiquetas TSC/Xprinter). Tamaño por defecto 50 × 30 mm.
+## Documentación
 
-## 6. Uso diario
-
-| Acción | Dónde |
+| Documento | Contenido |
 |---|---|
-| Ver cómo va el día | **Dashboard** (primera pantalla) |
-| Vender | **Vender**: escanee o toque la prenda · cliente opcional · método · **F12** |
-| Reimprimir un tiquete | **Documentos** › buscar › *Reimprimir comprobante* (o **F9** en Vender para el último) |
-| Devolución parcial / anular | **Documentos** › buscar (escanee el código del tiquete) › *Procesar devolución / Anular* |
-| Cerrar el día | **Caja** › *Arqueo ciego y cierre* |
+| [Funcionamiento del sistema](docs/FUNCIONAMIENTO.md) | Módulos, flujo de venta, caja, separados y reglas de negocio |
+| [Operación diaria](docs/OPERACION.md) | Tareas frecuentes, atajos de teclado y cómo corregir errores |
+| [Hardware](docs/HARDWARE.md) | Impresora de tiquetes, impresora de etiquetas, cajón y lector |
+| [Datos, respaldos y seguridad](docs/DATOS_Y_SEGURIDAD.md) | Dónde se guarda todo, respaldos, auditoría y facturación |
+| [Instalación y actualizaciones](docs/INSTALACION.md) | Instalador, actualizaciones firmadas y publicación de versiones |
+| [Desarrollo](docs/DESARROLLO.md) | Estructura del código, entorno local, pruebas y compilación |
 
-Atajos: `Ctrl+1..5` módulos · en Vender `F2` buscar, `F12` pagar, `F5` nueva venta, `F8` quitar último, `Esc` limpiar.
+## Privacidad
 
-### Devoluciones y anulaciones
-- Se elige cuántas unidades de cada prenda se devuelven y el **motivo** (obligatorio).
-- Las prendas vuelven al inventario; el valor se reintegra por el método original y se descuenta
-  del arqueo de la caja abierta y de las métricas (Ventas Totales, Utilidad, gráficos).
-- Si se devuelve todo, el tiquete queda **ANULADO**; si no, **DEVOLUCION PARCIAL**.
-- Nada se borra: los tiquetes, sus detalles, las devoluciones, el historial y la auditoría son
-  de solo lectura en la base de datos (protegidos con *triggers*). Se imprime comprobante.
+El repositorio contiene únicamente el código del programa. Los datos de la tienda (ventas,
+inventario, clientes, NIT, dirección y configuración) viven solo en el equipo de la tienda y
+en sus respaldos, nunca en este repositorio.
 
-### Importar `Inventario General 01.xlsx`
-Inventario › **Importar Excel** reconoce el formato de la tienda:
+## Licencia
 
-| Columna del archivo | Uso en el POS |
-|---|---|
-| Nombre + Color + Talla | `Wide Leg · Azul Indigo · T8` (cada talla se distingue) |
-| Código Interno | Código de barras (Code128) para escanear y etiquetar |
-| Precio Unitario Venta / Compra | Precio de venta / costo (utilidad real) |
-| Stock, Stock Mínimo, Categoria, Marca | Igual que en el archivo |
-| Códigos de unidad / moneda / impuesto | Se guardan para re-exportar |
+Software propietario. © 2026 maiwxzs. Desarrollado para uso exclusivo de Confecciones R4.
+Ver [LICENSE](LICENSE).
 
-Si el libro tiene varias hojas usa "INVENTARIO GENERAL" y permite cambiarla en la vista previa.
-**Exportar en formato original** devuelve las mismas 14 columnas con el stock actualizado.
+---
 
-## 6b. Corregir errores (nada se borra a escondidas: todo queda en la auditoría)
-
-| Me equivoqué en… | Solución | Dónde |
-|---|---|---|
-| Cobré en efectivo pero pagó con débito/Nequi | **Corregir método de pago** (mientras la caja siga abierta) | Documentos › tiquete |
-| Una venta completa | **Procesar devolución / Anular** (clave) | Documentos › tiquete |
-| Algunas prendas de una venta | Devolución parcial (cantidades + motivo) | Documentos › tiquete |
-| La base inicial | **Corregir base inicial** (clave) | Caja |
-| Abrí la caja sin querer | **Anular apertura** (solo si no tiene ventas) | Caja |
-| Cerré la caja antes de tiempo | **Reabrir último cierre** (clave) | Caja |
-| Saqué/puse dinero del cajón | **Salida / gasto** o **Entrada de efectivo** | Caja |
-| Registré mal un gasto | **Anular movimiento** (clave) y registrarlo bien | Caja |
-| Creé un producto por error | **Eliminar** (si ya se vendió, se desactiva) | Inventario |
-| Importé el Excel equivocado | **Deshacer última importación** | Inventario |
-| Desactivé un producto | Ver desactivados › **Reactivar** | Inventario |
-| Quiero empezar de cero | **Borrar datos / dejar en blanco** (con respaldo previo) | Ajustes › Datos |
-| Quiero volver a como estaba ayer | **Restaurar un respaldo** | Ajustes › Datos |
-
-**Dinero del datáfono (débito/crédito), Nequi y Daviplata:** no entra al cajón; va directo al
-banco o a la app. Por eso el arqueo solo cuenta efectivo. Al cerrar, escriba el total del
-*cierre del datáfono* y lo recibido en Nequi/Daviplata: el sistema lo compara con las ventas
-y muestra las diferencias en el reporte de cierre.
-
-**Validaciones automáticas:** no vende prendas sin precio ni sin stock; alerta si el monto recibido
-parece mal digitado; pide clave para descuentos mayores al 30 %; avisa si el precio queda por
-debajo del costo o cambia demasiado; no deja stock negativo; pide recontar una vez si el arqueo
-no cuadra (sin revelar la cifra) y exige observación si persiste la diferencia; avisa al cerrar
-el programa con una venta en curso.
-
-**Clave de administrador:** créela en *Ajustes › Seguridad*.
-
-## 7. Facturación y DIAN (léalo)
-
-- El programa imprime un **comprobante de venta numerado**, 100 % offline. **No genera factura
-  electrónica ni documento equivalente electrónico POS, ni transmite nada a la DIAN.**
-- Desde el 1 de julio de 2024 el tiquete POS en papel dejó de ser válido como documento
-  equivalente para quienes están **obligados** a facturar; ellos deben usar factura electrónica
-  o el *documento equivalente electrónico tiquete POS* (Resolución DIAN 000165 de 2023,
-  modificada por la 000008 de 2024), a través de un proveedor tecnológico.
-- Las personas naturales **no responsables de IVA** que cumplen todos los requisitos legales
-  figuran entre los no obligados a facturar. **Confirme con su contador** en cuál caso está.
-- **La numeración SETP / 18760000001 / 990000000–995000000 es la resolución pública del set de
-  pruebas de la DIAN**, no una autorización del negocio. Mientras esté configurada, el tiquete
-  sale como *"Comprobante interno de venta – No es factura ni documento equivalente
-  electrónico"*. Si la DIAN le autoriza una numeración propia, escríbala en *Ajustes › Empresa
-  y DIAN* y el tiquete mostrará la resolución.
-
-## 8. Notas técnicas
-
-- Utilidad neta real = (precio de venta − descuento prorrateado) − costo, guardada por prenda al
-  vender. Descuentos prorrateados en centenas; reintegros parciales redondeados a $50.
-- Ventas Totales del Dashboard = netas (descontando anulaciones y devoluciones).
-- Efectivo esperado = base + ventas en efectivo − devoluciones en efectivo de la caja abierta.
-- Auditoría (*Ajustes › Datos › Exportar auditoría*): cambios de precio/stock, importaciones,
-  aperturas y cierres de caja, devoluciones y cambios de configuración.
-- El formato `$ #,##0` de Excel usa el separador de miles de Windows (Colombia → `$ 1.250.000`).
-- Desarrollo: `pip install -r requirements.txt` y `python main.py`.
-  `R4_DATA_DIR=<carpeta>` usa otra carpeta de datos (pruebas).
+<div align="center"><sub><i>hecho con dedicación por maiwxzs</i></sub></div>

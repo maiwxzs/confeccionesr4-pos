@@ -1,18 +1,3 @@
-"""
-printer_engine.py — Impresión térmica directa ESC/POS para impresoras Jaltech (80 mm / 58 mm).
-
-Por qué así
------------
-* Los bytes ESC/POS se generan aquí mismo (sin plantillas PDF ni visores): un tiquete
-  completo pesa ~2 KB y sale en menos de 1 segundo.
-* Transporte por defecto ``win32``: se envía el flujo RAW a la cola de Windows con
-  ``win32print`` usando el driver USB que Jaltech instala. Es lo más estable: no exige
-  reemplazar el driver con Zadig/WinUSB y no abre ningún diálogo.
-* Transporte ``usb`` (python-escpos + libusb) disponible para quien ya usa WinUSB.
-* Transporte ``red`` (puerto 9100) para modelos Ethernet y ``archivo`` para pruebas.
-
-Anchos: 80 mm = 48 columnas / 576 puntos · 58 mm = 32 columnas / 384 puntos (Fuente A).
-"""
 from __future__ import annotations
 
 import socket
@@ -25,7 +10,6 @@ import config as cfg
 
 ESC, GS, FS = b"\x1b", b"\x1d", b"\x1c"
 
-# Tabla de caracteres ESC t n más comunes en firmwares Epson/Jaltech/Xprinter
 CODEPAGES = {"cp437": 0, "cp850": 2, "cp860": 3, "cp858": 19, "cp1252": 16}
 
 
@@ -33,12 +17,8 @@ class PrinterError(Exception):
     pass
 
 
-# =========================================================================== #
 # Constructor de comandos ESC/POS
-# =========================================================================== #
 class EscPos:
-    """Construye el flujo de bytes y, en paralelo, una vista previa en texto plano."""
-
     def __init__(self, ancho_mm: int = 80, codepage: str = "cp850"):
         self.ancho_mm = 58 if int(ancho_mm) == 58 else 80
         self.cols = 32 if self.ancho_mm == 58 else 48
@@ -46,13 +26,13 @@ class EscPos:
         self.codepage = codepage if codepage in CODEPAGES else "cp850"
         self.buf = bytearray()
         self.preview: list[str] = []
-        self.lineas: list[dict] = []      # copia con formato, para generar el PDF del tiquete
+        self.lineas: list[dict] = []
         self._doble = False
         self._alto = False
         self._negrita = False
-        self.buf += ESC + b"@"                                   # Inicializar
-        self.buf += ESC + b"t" + bytes([CODEPAGES[self.codepage]])  # Tabla de caracteres
-        self.buf += FS + b"."                                    # Cancelar modo Kanji (clones chinos)
+        self.buf += ESC + b"@"
+        self.buf += ESC + b"t" + bytes([CODEPAGES[self.codepage]])
+        self.buf += FS + b"."
 
     # ---------- texto ----------
     def _enc(self, txt: str) -> bytes:
@@ -96,14 +76,13 @@ class EscPos:
         alin = getattr(self, "_alin", "izq")
         w = self.ancho
         linea = txt.center(w) if alin == "centro" else (txt.rjust(w) if alin == "der" else txt)
-        if self._doble:  # simula el doble ancho en la vista previa
+        if self._doble:
             linea = " ".join(linea[:w])
         self.preview.append(linea.rstrip()[: self.cols])
         self.lineas.append({"t": txt, "b": self._negrita, "w": self._doble, "h": self._alto, "a": alin})
         return self
 
     def envolver(self, txt: str) -> "EscPos":
-        """Texto largo partido en líneas del ancho disponible (sin cortar palabras)."""
         for parrafo in str(txt).split("\n"):
             linea = ""
             for palabra in parrafo.split():
@@ -133,19 +112,18 @@ class EscPos:
     # ---------- códigos ----------
     def codigo_barras(self, datos: str, alto: int = 60, ancho_modulo: int = 2) -> "EscPos":
         datos = "".join(ch for ch in datos if 32 <= ord(ch) < 127)
-        self.buf += GS + b"h" + bytes([alto])            # Alto en puntos
-        self.buf += GS + b"w" + bytes([ancho_modulo])    # Ancho de módulo (2..6)
-        self.buf += GS + b"H" + b"\x02"                  # Texto legible debajo
+        self.buf += GS + b"h" + bytes([alto])
+        self.buf += GS + b"w" + bytes([ancho_modulo])
+        self.buf += GS + b"H" + b"\x02"
         self.buf += GS + b"f" + b"\x00"
         payload = b"{B" + datos.encode("ascii")
-        self.buf += GS + b"k" + bytes([73, len(payload)]) + payload  # CODE128 (función B)
+        self.buf += GS + b"k" + bytes([73, len(payload)]) + payload
         self.buf += b"\n"
         self.preview.append(f"||| {datos} |||".center(self.cols))
         self.lineas.append({"barcode": datos})
         return self
 
     def imagen(self, img, fragmento: int = 256) -> "EscPos":
-        """Imagen PIL en modo raster GS v 0 (centrada y ajustada al ancho del papel)."""
         from PIL import Image, ImageOps
         im = img.convert("L")
         if im.width > self.dots:
@@ -163,18 +141,17 @@ class EscPos:
             self.buf += GS + b"v0\x00" + bytes([ancho_bytes & 0xFF, ancho_bytes >> 8, h & 0xFF, h >> 8])
             self.buf += trozo
         self.preview.append(f"[imagen {img.width}x{img.height}]".center(self.cols))
-        # Copia en blanco y negro (negro = 0) para el PDF del tiquete
         self.lineas.append({"img": lienzo.point(lambda v: 0 if v < 160 else 255).convert("1")})
         return self
 
     # ---------- hardware ----------
     def abrir_cajon(self) -> "EscPos":
-        self.buf += ESC + b"p\x00\x19\xfa"   # Pin 2, pulso 50 ms / 500 ms
+        self.buf += ESC + b"p\x00\x19\xfa"
         self.cajon = True
         return self
 
     def cortar(self) -> "EscPos":
-        self.buf += GS + b"V" + bytes([66, 3])  # Avanza 3 líneas y corte parcial
+        self.buf += GS + b"V" + bytes([66, 3])
         self.preview.append("✂" + "-" * (self.cols - 1))
         return self
 
@@ -185,9 +162,7 @@ class EscPos:
         return "\n".join(self.preview)
 
 
-# =========================================================================== #
 # Transportes
-# =========================================================================== #
 def listar_impresoras() -> list[str]:
     try:
         import win32print
@@ -252,7 +227,6 @@ def _enviar_red(datos: bytes, destino: str) -> None:
 
 def enviar(datos: bytes, conf: dict[str, str], impresora: str | None = None,
            titulo: str = "ConfeccionesR4") -> None:
-    """Despacha bytes RAW según el transporte configurado."""
     transporte = conf.get("transporte_impresion", "win32")
     nombre = conf.get("impresora_tiquetes", "") if impresora is None else impresora
     if transporte == "usb":
@@ -267,9 +241,7 @@ def enviar(datos: bytes, conf: dict[str, str], impresora: str | None = None,
         _enviar_win32(datos, nombre, titulo)
 
 
-# =========================================================================== #
 # Documentos
-# =========================================================================== #
 def _nuevo(conf: dict[str, str]) -> EscPos:
     return EscPos(int(conf.get("ancho_papel_mm", 80) or 80), conf.get("codepage", "cp850"))
 
@@ -278,7 +250,6 @@ LOGO_PREDETERMINADO = "logo_ticket.png"
 
 
 def ruta_logo(conf: dict[str, str]):
-    """Logo del tiquete: el que se cargó en Ajustes o, si no hay, el águila de ConfeccionesR4."""
     from pathlib import Path
     propio = str(conf.get("logo_tiquete") or "").strip()
     if propio and Path(propio).is_file():
@@ -297,7 +268,7 @@ def _logo(p: EscPos, conf: dict[str, str]) -> None:
         from PIL import Image
         im = Image.open(ruta)
         im.load()
-    except Exception:  # noqa: BLE001 — un logo dañado nunca debe impedir imprimir la venta
+    except Exception:
         return
     try:
         pct = max(25, min(90, int(conf.get("tamano_logo_tiquete", "50") or 50)))
@@ -305,7 +276,7 @@ def _logo(p: EscPos, conf: dict[str, str]) -> None:
         pct = 50
     ancho = int(p.dots * pct / 100)
     alto = max(1, int(im.height * ancho / im.width))
-    tope = int(p.dots * 0.75)                 # logos muy altos: limitar para no gastar papel
+    tope = int(p.dots * 0.75)
     if alto > tope:
         ancho, alto = max(1, int(ancho * tope / alto)), tope
     if im.mode in ("RGBA", "LA", "P"):
@@ -314,14 +285,11 @@ def _logo(p: EscPos, conf: dict[str, str]) -> None:
         fondo.alpha_composite(im)
         im = fondo
     im = im.convert("L").resize((ancho, alto), Image.LANCZOS)
-    # Tramado (puntos) para que los grises y degradados del logo también salgan en papel térmico
     im = im.convert("1").convert("L")
     p.alinear("centro").imagen(im)
 
 
 def preparar_logo(origen) -> "Path":
-    """Copia el logo elegido a la carpeta de datos, en escala de grises, recortado y sin fondo
-    transparente. Devuelve la ruta para guardarla en la configuración."""
     from pathlib import Path
     from PIL import Image, ImageChops, ImageOps
     im = Image.open(origen)
@@ -346,7 +314,6 @@ def preparar_logo(origen) -> "Path":
 
 
 def tiquete_de_muestra(conf: dict[str, str]):
-    """PDF de ejemplo con el diseño actual (no gasta consecutivo ni papel)."""
     import ticket_pdf
     venta = {
         "numero_tiquete": f"{conf.get('prefijo', 'SETP')}{conf.get('consecutivo_siguiente', '990000000')}",
@@ -366,14 +333,13 @@ def tiquete_de_muestra(conf: dict[str, str]):
 
 
 def _nombre_cursiva(p: EscPos, conf: dict[str, str]) -> bool:
-    """Nombre de la tienda con la misma letra cursiva de las etiquetas (imagen). False si no se pudo."""
     if conf.get("tiquete_nombre_cursiva", "1") != "1" or not conf.get("razon_social"):
         return False
     try:
         import barcode_engine as be
         img = be.imagen_nombre_cursiva(conf["razon_social"], int(p.dots * 0.86),
                                        conf.get("etiqueta_fuente", "Dancing Script"))
-    except Exception:  # noqa: BLE001 — sin la fuente: se imprime en letra normal
+    except Exception:
         return False
     p.alinear("centro").imagen(img)
     return True
@@ -385,7 +351,9 @@ def _cabecera(p: EscPos, conf: dict[str, str], resolucion: bool = True) -> None:
         p.alinear("centro").negrita(True)
     else:
         p.alinear("centro").negrita(True).tamano(2, 2).texto(conf.get("razon_social", "")).tamano(1, 1)
-    p.texto(f"NIT {conf.get('nit', '')}").negrita(False)
+    if conf.get("nit"):
+        p.texto(f"NIT {conf['nit']}")
+    p.negrita(False)
     p.envolver(conf.get("regimen", ""))
     p.envolver(conf.get("direccion", ""))
     tel = conf.get("telefono", "")
@@ -398,7 +366,6 @@ def _cabecera(p: EscPos, conf: dict[str, str], resolucion: bool = True) -> None:
     if resolucion:
         p.separador("=")
         if cfg.es_resolucion_de_prueba(conf):
-            # Numeración pública del set de pruebas DIAN: no se presenta como autorización real
             p.envolver("COMPROBANTE INTERNO DE VENTA - No es factura ni documento equivalente electrónico")
         else:
             p.envolver(f"Resolución DIAN No. {conf.get('resolucion_dian', '')}")
@@ -423,7 +390,6 @@ def _fecha_hora(iso: str) -> tuple[str, str]:
 
 
 def usa_efectivo(venta: dict[str, Any]) -> bool:
-    """True si en la operación entró o salió efectivo (para abrir el cajón)."""
     pagos = venta.get("pagos") or [(venta.get("metodo_pago"), venta.get("total", 0))]
     return any(m == "Efectivo" and v for m, v in pagos) or bool(venta.get("cambio"))
 
@@ -487,7 +453,6 @@ def construir_tiquete(venta: dict[str, Any], conf: dict[str, str], reimpresion: 
         if venta.get("cliente_documento"):
             p.texto(f"C.C./NIT: {venta['cliente_documento']}")
     p.separador("-")
-    # Tabla: CANT  DESCRIPCIÓN ................ VALOR
     w_val = 11 if p.cols >= 48 else 10
     w_cant = 5 if p.cols >= 48 else 4
     w_desc = p.cols - w_cant - w_val
@@ -521,7 +486,7 @@ def construir_tiquete(venta: dict[str, Any], conf: dict[str, str], reimpresion: 
     total_txt = cfg.cop(venta["total"])
     if len("TOTAL") + 1 + len(total_txt) <= p.cols // 2:
         p.negrita(True).tamano(2, 2).dos_columnas("TOTAL", total_txt).tamano(1, 1).negrita(False)
-    else:   # montos grandes en 58 mm: letra alta pero de ancho normal, para que nunca se corte
+    else:
         p.negrita(True).tamano(1, 2).dos_columnas("TOTAL A PAGAR", total_txt).tamano(1, 1).negrita(False)
     p.separador("=")
     _bloque_pago(p, venta)
@@ -612,7 +577,6 @@ def construir_cierre(cierre: dict[str, Any], conf: dict[str, str]) -> EscPos:
 
 def construir_devolucion(venta: dict[str, Any], conf: dict[str, str], motivo: str = "",
                          abrir_cajon: bool = False) -> EscPos:
-    """Comprobante de devolución / anulación (usa venta['devolucion'] si viene de registrar_devolucion)."""
     p = _nuevo(conf)
     if abrir_cajon:
         p.abrir_cajon()
@@ -647,7 +611,6 @@ def construir_devolucion(venta: dict[str, Any], conf: dict[str, str], motivo: st
 
 def construir_separado(sep: dict[str, Any], conf: dict[str, str], titulo: str = "SEPARADO",
                        abono: dict[str, Any] | None = None, abrir_cajon: bool = False) -> EscPos:
-    """Comprobante de separado / abono: prendas apartadas, abonado, saldo y fecha límite."""
     p = _nuevo(conf)
     if abrir_cajon:
         p.abrir_cajon()
@@ -704,12 +667,9 @@ def construir_prueba(conf: dict[str, str]) -> EscPos:
     return p
 
 
-# =========================================================================== #
 # Etiquetas
-# =========================================================================== #
 def _tspl(img, ancho_mm: float, alto_mm: float, copias: int) -> bytes:
-    """TSPL (impresoras de etiquetas tipo TSC/Xprinter/Jaltech de etiquetas)."""
-    bw = img.convert("1")  # en TSPL BITMAP: bit 1 = blanco, bit 0 = punto impreso
+    bw = img.convert("1")
     ancho_bytes = (bw.width + 7) // 8
     cab = (f"SIZE {ancho_mm} mm,{alto_mm} mm\r\nGAP 2 mm,0 mm\r\nDIRECTION 1\r\nCLS\r\n"
            f"BITMAP 0,0,{ancho_bytes},{bw.height},0,").encode("ascii")
@@ -717,7 +677,6 @@ def _tspl(img, ancho_mm: float, alto_mm: float, copias: int) -> bytes:
 
 
 def _imprimir_gdi(img, impresora: str, ancho_mm: float, alto_mm: float, copias: int) -> None:
-    """A través del driver de Windows (sirve con CUALQUIER impresora instalada)."""
     try:
         import win32print
         import win32ui
@@ -736,7 +695,7 @@ def _imprimir_gdi(img, impresora: str, ancho_mm: float, alto_mm: float, copias: 
         w = int(ancho_mm / 25.4 * dpi_x)
         h = int(alto_mm / 25.4 * dpi_y)
         pagina_mm = dc.GetDeviceCaps(HORZRES) / dpi_x * 25.4
-        if ancho_mm > pagina_mm + 2:         # nunca encoger: un código aplastado no se puede leer
+        if ancho_mm > pagina_mm + 2:
             raise PrinterError(
                 f"El papel configurado en el driver de «{nombre}» mide {pagina_mm:.0f} mm de ancho, pero la "
                 f"fila de etiquetas mide {ancho_mm:.0f} mm.\n\nAbra Windows › Impresoras › {nombre} › "
@@ -753,7 +712,6 @@ def _imprimir_gdi(img, impresora: str, ancho_mm: float, alto_mm: float, copias: 
         dc.DeleteDC()
 
 
-# Nombres con los que Windows suele instalar impresoras de ETIQUETAS (SAT TT460 con driver Seagull, TSC…)
 CLAVES_ETIQUETAS = ("tt460", "sat tt", "sat xt", "tsc", "ttp-", "te200", "te210", "zdesigner", "zebra", "godex",
                     "argox", "honeywell", "label", "etiqueta", "4barcode", "barcode")
 
@@ -769,8 +727,6 @@ def detectar_impresora_etiquetas(lista: list[str] | None = None) -> list[str]:
 
 
 def etiqueta_de_prueba(conf: dict[str, str]):
-    """Etiqueta del tamaño configurado con un marco en el borde: si el marco sale completo y centrado,
-    el tamaño está bien; si se corta, hay que ajustar el tamaño aquí y en el driver de Windows."""
     import barcode_engine as be
     from PIL import ImageDraw
     ancho = float(conf.get("etiqueta_ancho_mm", 50) or 50)
@@ -797,38 +753,39 @@ def columnas_etiquetas(conf: dict[str, str]) -> int:
     return max(1, min(4, int(_num(conf, "etiqueta_columnas", 1))))
 
 
-def componer_fila(img, conf: dict[str, str]):
-    """Rollos de 2, 3 o 4 etiquetas por fila: repite la etiqueta en cada columna, con la separación
-    y el margen configurados. Devuelve (imagen de la fila completa, ancho total en mm)."""
+def componer_fila(img, conf: dict[str, str], cantidad: int | None = None):
     from PIL import Image
     cols = columnas_etiquetas(conf)
     ancho = _num(conf, "etiqueta_ancho_mm", 50)
     sep = _num(conf, "etiqueta_separacion_mm", 2)
     margen = _num(conf, "etiqueta_margen_mm", 0)
     total_mm = margen + cols * ancho + (cols - 1) * sep
+    llenas = cols if cantidad is None else max(0, min(cols, int(cantidad)))
     if cols == 1 and not margen:
         return img, ancho
     px_mm = img.width / ancho
     fila = Image.new("L", (round(total_mm * px_mm), img.height), 255)
-    for i in range(cols):
+    for i in range(llenas):
         fila.paste(img.convert("L"), (round((margen + i * (ancho + sep)) * px_mm), 0))
     return fila, total_mm
 
 
 def imprimir_etiquetas(img, copias: int, conf: dict[str, str]) -> int:
-    """Imprime `copias` etiquetas. En rollos de varias columnas se imprimen filas completas
-    (p. ej. 5 copias en rollo de 3 → 2 filas = 6 etiquetas). Devuelve cuántas etiquetas salieron."""
     modo = conf.get("modo_etiquetas", "windows")
     impresora = conf.get("impresora_etiquetas") or conf.get("impresora_tiquetes", "")
     alto = _num(conf, "etiqueta_alto_mm", 30)
     copias = max(1, int(copias))
-    if modo != "escpos":
-        cols = columnas_etiquetas(conf)
-        img, ancho = componer_fila(img, conf)
-        filas = -(-copias // cols)
-        _imprimir_lote(img, filas, conf, modo, impresora, ancho, alto)
-        return filas * cols
-    _imprimir_lote(img, copias, conf, modo, impresora, _num(conf, "etiqueta_ancho_mm", 50), alto)
+    if modo == "escpos":
+        _imprimir_lote(img, copias, conf, modo, impresora, _num(conf, "etiqueta_ancho_mm", 50), alto)
+        return copias
+    cols = columnas_etiquetas(conf)
+    completas, sobrantes = divmod(copias, cols)
+    if completas:
+        fila, ancho = componer_fila(img, conf)
+        _imprimir_lote(fila, completas, conf, modo, impresora, ancho, alto)
+    if sobrantes:
+        fila, ancho = componer_fila(img, conf, sobrantes)
+        _imprimir_lote(fila, 1, conf, modo, impresora, ancho, alto)
     return copias
 
 

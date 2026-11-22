@@ -1,23 +1,3 @@
-"""
-excel_engine.py — Importación masiva de inventario y exportación de reportes ejecutivos.
-
-Importación
------------
-* Lee .xlsx/.xlsm (openpyxl, modo solo-lectura = rápido), .xls/.ods (pandas) y .csv.
-* Detecta automáticamente la fila de encabezados (aunque el archivo tenga títulos arriba).
-* Mapeo inteligente de columnas por sinónimos y puntuación ("Costo Compra", "Precio Venta",
-  "Cód. Barras", "Existencias", "Descripción"...).
-* Limpieza: espacios, mayúsculas/minúsculas, códigos numéricos que Excel volvió decimales
-  o notación científica, montos con "$" y puntos de miles, categorías inferidas por nombre.
-
-Exportación
------------
-* Encabezado con Razón Social, NIT y título del reporte.
-* Títulos de tabla azul oscuro con texto blanco en negrita y centrado.
-* Filas cebra, formato monetario `$ #,##0` NUMÉRICO (las sumas de Excel funcionan).
-* Auto-ajuste real de ancho de columnas (nunca ### ni textos truncados).
-* Fila de TOTALES en negrita con borde superior simple y borde inferior doble.
-"""
 from __future__ import annotations
 
 import csv
@@ -36,11 +16,8 @@ import json
 
 import config as cfg
 
-# =========================================================================== #
 # Utilidades de texto
-# =========================================================================== #
 def normalizar(texto: Any) -> str:
-    """'Código de Barras ' -> 'codigo de barras'."""
     s = unicodedata.normalize("NFKD", str(texto or "")).encode("ascii", "ignore").decode()
     s = re.sub(r"[^a-z0-9]+", " ", s.lower())
     return re.sub(r"\s+", " ", s).strip()
@@ -51,7 +28,6 @@ _TALLAS = {"XS", "S", "M", "L", "XL", "XXL", "XXXL"}
 
 
 def capitalizar_nombre(texto: str) -> str:
-    """'JEAN  SKINNY dama t32 ' -> 'Jean Skinny Dama T32'. Respeta tokens con dígitos (T32, 2XL)."""
     palabras = re.sub(r"\s+", " ", str(texto or "")).strip().split(" ")
     out = []
     for i, p in enumerate(palabras):
@@ -61,17 +37,16 @@ def capitalizar_nombre(texto: str) -> str:
             out.append(p.upper())
         elif i > 0 and p.lower() in _PALABRAS_MENORES:
             out.append(p.lower())
-        else:  # 'Y/OUT' -> 'Y/Out', 'TIRO-ALTO' -> 'Tiro-Alto'
+        else:
             out.append(re.sub(r"[^/\-]+", lambda m: m.group(0)[:1].upper() + m.group(0)[1:].lower(), p))
     return " ".join(out)
 
 
 def limpiar_codigo(valor: Any) -> str:
-    """7701234567890.0 / 7.70123E+12 / ' 00123 ' -> texto de código limpio."""
     if valor is None:
         return ""
     if isinstance(valor, float):
-        if valor != valor:  # NaN
+        if valor != valor:
             return ""
         if valor.is_integer():
             return str(int(valor))
@@ -94,9 +69,7 @@ def a_entero(valor: Any) -> int:
     return cfg.parse_cop(valor)
 
 
-# =========================================================================== #
 # Mapeo inteligente de columnas
-# =========================================================================== #
 SINONIMOS: dict[str, list[str]] = {
     "codigo": ["codigo", "codigo interno", "cod", "codigo de barras", "cod barras", "codigo barras", "barcode",
                "ean", "ean13", "sku", "plu", "codigo producto", "codigo del producto"],
@@ -116,7 +89,6 @@ SINONIMOS: dict[str, list[str]] = {
     "talla": ["talla", "tallas", "size", "talla prenda", "medida"],
 }
 CAMPOS_OBLIGATORIOS = ("nombre",)
-# Columnas de códigos técnicos (unidad, moneda, impuesto…): solo se aceptan por coincidencia exacta
 _PALABRAS_TECNICAS = ("tipo", "impuesto", "moneda", "unidad", "iva", "tarifa")
 
 
@@ -134,7 +106,6 @@ def puntuar_columna(encabezado: str) -> tuple[str | None, int]:
                 sc = len(s)
             else:
                 continue
-            # Reglas de desambiguación compra/venta y stock/stock mínimo
             if campo == "precio" and re.search(r"\b(compra|costo)\b", h):
                 continue
             if campo == "costo" and re.search(r"\bventa\b", h):
@@ -147,8 +118,6 @@ def puntuar_columna(encabezado: str) -> tuple[str | None, int]:
 
 
 def mapear_columnas(encabezados: Sequence[Any]) -> dict[str, int]:
-    """Devuelve {campo: índice_columna}. Cada columna y cada campo se asignan una sola vez
-    (mayor puntaje primero; en empate gana la columna más a la izquierda)."""
     candidatos = []
     for idx, enc in enumerate(encabezados):
         campo, sc = puntuar_columna(enc)
@@ -164,9 +133,6 @@ def mapear_columnas(encabezados: Sequence[Any]) -> dict[str, int]:
     return mapeo
 
 
-# =========================================================================== #
-# Inferencia de categoría y nombre de la variante
-# =========================================================================== #
 def inferir_categoria(nombre: str, categoria_archivo: str = "") -> str:
     base = {normalizar(c): c for c in cfg.CATEGORIAS_BASE}
     ca = normalizar(categoria_archivo)
@@ -190,7 +156,6 @@ def inferir_categoria(nombre: str, categoria_archivo: str = "") -> str:
 
 
 def texto_talla(talla: Any) -> str:
-    """14 -> 'T14' · '2xl' -> '2XL' · 'UNICA' -> 'Única' · None -> ''."""
     t = limpiar_codigo(talla)
     if not t or t in {"NONE", "NAN", "N/A", "NA", "-"}:
         return ""
@@ -202,8 +167,6 @@ def texto_talla(talla: Any) -> str:
 
 
 def componer_nombre(nombre: str, color: str = "", talla: Any = None) -> str:
-    """'STRAIGLETH LEG' + 'AZUL CLARO' + 14 -> 'Straigleth Leg · Azul Claro · T14'
-    (así cada variante se distingue en el POS, el tiquete y la etiqueta)."""
     base = capitalizar_nombre(nombre)
     partes = [base]
     nb = normalizar(base)
@@ -215,15 +178,12 @@ def componer_nombre(nombre: str, color: str = "", talla: Any = None) -> str:
     return " · ".join(partes)
 
 
-# =========================================================================== #
 # Lectura de archivos
-# =========================================================================== #
 def _filas_no_vacias(filas: list[list[Any]]) -> int:
     return sum(1 for r in filas if any(v not in (None, "") for v in r))
 
 
 def _leer_libro(path: Path) -> dict[str, list[list[Any]]]:
-    """{nombre_hoja: filas}. Se conservan filas vacías para reportar el número real de fila."""
     ext = path.suffix.lower()
     if ext in (".xlsx", ".xlsm"):
         wb = load_workbook(path, read_only=True, data_only=True)
@@ -243,7 +203,7 @@ def _leer_libro(path: Path) -> dict[str, list[list[Any]]]:
         dialecto = csv.Sniffer().sniff(texto[:4096], delimiters=";,\t|")
         return {path.stem: [list(r) for r in csv.reader(texto.splitlines(), dialecto)]}
     if ext in (".xls", ".ods"):
-        import pandas as pd  # import diferido: no retrasa el arranque de la app
+        import pandas as pd
         hojas = pd.read_excel(path, header=None, dtype=object, sheet_name=None)
         return {n: [list(r) for r in df.where(df.notna(), None).itertuples(index=False)] for n, df in hojas.items()}
     raise ValueError(f"Formato no soportado: {ext}")
@@ -260,7 +220,6 @@ def _detectar_fila_encabezado(filas: list[list[Any]], max_busqueda: int = 20) ->
 
 
 def elegir_hoja(libro: dict[str, list[list[Any]]]) -> str:
-    """Hoja con encabezados reconocibles y más filas; prefiere una llamada 'inventario'."""
     def puntaje(item):
         nombre, filas = item
         _, mapeo = _detectar_fila_encabezado(filas)
@@ -272,13 +231,13 @@ def elegir_hoja(libro: dict[str, list[list[Any]]]) -> str:
 @dataclass
 class ResultadoImportacion:
     filas: list[dict[str, Any]] = field(default_factory=list)
-    mapeo: dict[str, str] = field(default_factory=dict)       # campo -> encabezado original
-    omitidas: list[tuple[int, str]] = field(default_factory=list)  # (fila Excel, motivo)
+    mapeo: dict[str, str] = field(default_factory=dict)
+    omitidas: list[tuple[int, str]] = field(default_factory=list)
     advertencias: list[str] = field(default_factory=list)
     fila_encabezado: int = 1
     hoja: str = ""
     hojas: list[str] = field(default_factory=list)
-    encabezados: list[str] = field(default_factory=list)      # columnas originales (para re-exportar)
+    encabezados: list[str] = field(default_factory=list)
 
     @property
     def resumen(self) -> str:
@@ -301,7 +260,6 @@ def _valor_origen(v: Any) -> Any:
 
 
 def importar_inventario(path: str | Path, hoja: str | None = None) -> ResultadoImportacion:
-    """Lee y limpia un archivo de inventario (p. ej. 'Inventario General 01.xlsx')."""
     path = Path(path)
     libro = _leer_libro(path)
     res = ResultadoImportacion()
@@ -340,7 +298,7 @@ def importar_inventario(path: str | Path, hoja: str | None = None) -> ResultadoI
                 res.omitidas.append((n, "Sin nombre de producto"))
             continue
         if normalizar(nombre_raw) in {"total", "totales", "total general", "subtotal"}:
-            continue  # fila de totales del archivo original
+            continue
         costo = a_entero(val(fila, "costo"))
         precio = a_entero(val(fila, "precio"))
         stock = a_entero(val(fila, "stock"))
@@ -391,9 +349,7 @@ def importar_inventario(path: str | Path, hoja: str | None = None) -> ResultadoI
     return res
 
 
-# =========================================================================== #
 # Exportación con formato ejecutivo
-# =========================================================================== #
 FMT_MONEDA = '"$ "#,##0;[Red]-"$ "#,##0'
 FMT_ENTERO = '#,##0'
 FMT_FECHA = 'dd/mm/yyyy hh:mm'
@@ -409,13 +365,12 @@ BORDE_SUAVE = "D0D7E2"
 class Columna:
     titulo: str
     clave: str
-    tipo: str = "texto"          # texto | moneda | entero | fecha | porcentaje
-    total: bool = False          # ¿sumar en la fila de TOTALES?
+    tipo: str = "texto"
+    total: bool = False
     ancho_max: int = 60
 
 
 def _texto_visible(valor: Any, tipo: str) -> str:
-    """Cómo se verá el valor en Excel (para medir el ancho real)."""
     if valor is None:
         return ""
     if tipo == "moneda":
@@ -439,8 +394,6 @@ def _a_fecha(v: Any) -> Any:
 
 
 class ReporteExcel:
-    """Libro de Excel con una o varias hojas de formato ejecutivo homogéneo."""
-
     def __init__(self, empresa: dict[str, str]):
         self.empresa = empresa
         self.wb = Workbook()
@@ -465,12 +418,13 @@ class ReporteExcel:
         ultima = get_column_letter(max(ncol, 1))
         filas = [dict(f) for f in filas]
 
-        # --- Encabezado corporativo -------------------------------------------------
         e = self.empresa
         cab = [
             (e.get("razon_social", ""), Font(name="Calibri", size=16, bold=True, color=AZUL_OSCURO)),
-            (f"NIT {e.get('nit','')}  ·  {e.get('regimen','')}", Font(name="Calibri", size=10, color=GRIS_INSTITUCIONAL)),
-            (f"{e.get('direccion','')}  ·  Tel. {e.get('telefono','')}  ·  {e.get('ciudad','')}",
+            ("  ·  ".join(x for x in (f"NIT {e['nit']}" if e.get("nit") else "", e.get("regimen", "")) if x),
+             Font(name="Calibri", size=10, color=GRIS_INSTITUCIONAL)),
+            ("  ·  ".join(x for x in (e.get("direccion", ""), f"Tel. {e['telefono']}" if e.get("telefono") else "",
+                                      e.get("ciudad", "")) if x),
              Font(name="Calibri", size=10, color=GRIS_INSTITUCIONAL)),
             (titulo.upper(), Font(name="Calibri", size=13, bold=True, color="000000")),
             (subtitulo or f"Generado: {datetime.now():%d/%m/%Y %H:%M}",
@@ -482,9 +436,8 @@ class ReporteExcel:
                 ws.merge_cells(f"A{i}:{ultima}{i}")
             ws.cell(row=i, column=1).alignment = Alignment(horizontal="left", vertical="center")
         ws.row_dimensions[1].height = 24
-        fila_tit = len(cab) + 2  # una fila en blanco
+        fila_tit = len(cab) + 2
 
-        # --- Títulos de tabla ------------------------------------------------------
         borde_suave = Side(style="thin", color=BORDE_SUAVE)
         relleno_tit = PatternFill("solid", fgColor=AZUL_OSCURO)
         for j, col in enumerate(columnas, start=1):
@@ -495,7 +448,6 @@ class ReporteExcel:
             c.border = Border(left=borde_suave, right=borde_suave, top=borde_suave, bottom=borde_suave)
         ws.row_dimensions[fila_tit].height = 30
 
-        # --- Datos -----------------------------------------------------------------
         anchos = [len(col.titulo) * 1.15 + 2 for col in columnas]
         relleno_cebra = PatternFill("solid", fgColor=CEBRA)
         borde_celda = Border(left=borde_suave, right=borde_suave, bottom=borde_suave)
@@ -531,7 +483,6 @@ class ReporteExcel:
                     sumas[j - 1] += v
                 anchos[j - 1] = max(anchos[j - 1], len(_texto_visible(v, tipo)) + 2)
 
-        # --- Fila de TOTALES -------------------------------------------------------
         if totales and filas and any(col.total for col in columnas):
             rt = r + 1
             ini, fin = fila_tit + 1, r
@@ -547,26 +498,23 @@ class ReporteExcel:
                     c.alignment = Alignment(horizontal="left")
                 elif col.total:
                     letra = get_column_letter(j)
-                    c.value = f"=SUBTOTAL(9,{letra}{ini}:{letra}{fin})"  # respeta filtros
+                    c.value = f"=SUBTOTAL(9,{letra}{ini}:{letra}{fin})"
                     c.number_format = FMT_MONEDA if col.tipo == "moneda" else FMT_ENTERO
                     c.alignment = Alignment(horizontal="right" if col.tipo == "moneda" else "center")
                     anchos[j - 1] = max(anchos[j - 1], (len(_texto_visible(sumas[j - 1], col.tipo)) + 2) * 1.1)
             ws.row_dimensions[rt].height = 20
 
-        # --- Auto-ajuste de ancho (con margen de cortesía) ---------------------------
         for j, col in enumerate(columnas, start=1):
             ws.column_dimensions[get_column_letter(j)].width = min(max(anchos[j - 1] + 3, 10), col.ancho_max)
             if anchos[j - 1] + 2 > col.ancho_max:
                 for rr in range(fila_tit + 1, r + 1):
                     ws.cell(row=rr, column=j).alignment = Alignment(wrap_text=True, vertical="top")
-        # Si el título corporativo es más ancho que la tabla, ampliar la 1.ª columna
         ancho_tabla = sum(ws.column_dimensions[get_column_letter(j)].width for j in range(1, ncol + 1))
         largo_cab = max(len(str(t)) for t, _ in cab) * 1.05
         if ancho_tabla < largo_cab and ncol:
             letra = get_column_letter(1)
             ws.column_dimensions[letra].width += (largo_cab - ancho_tabla)
 
-        # --- Usabilidad ------------------------------------------------------------
         ws.freeze_panes = ws.cell(row=fila_tit + 1, column=1)
         if filas:
             ws.auto_filter.ref = f"A{fila_tit}:{ultima}{r}"
@@ -588,9 +536,7 @@ class ReporteExcel:
         return ruta
 
 
-# =========================================================================== #
 # Reportes listos para usar
-# =========================================================================== #
 def _empresa(db) -> dict[str, str]:
     return db.get_all_config()
 
@@ -692,7 +638,6 @@ def exportar_ventas(db, desde: str, hasta: str, ruta: str | Path) -> Path:
 
 
 def exportar_historial(db, filas: Iterable[Any], ruta: str | Path, subtitulo: str = "") -> Path:
-    """Historial de documentos (tiquetes) con el filtro aplicado en pantalla + eventos."""
     rep = ReporteExcel(_empresa(db))
     filas = [dict(f) for f in filas]
     rep.agregar_hoja(
@@ -803,7 +748,6 @@ def exportar_cierre_individual(db, cierre: dict[str, Any], ruta: str | Path) -> 
     return rep.guardar(ruta)
 
 
-# Formato de carga del software de facturación que usa la tienda ("Inventario General 01.xlsx")
 FORMATO_CARGA_DEFECTO = [
     "Nombre", "Código Interno", "Código Tipo de Unidad", "Código Tipo de Moneda", "Precio Unitario Venta",
     "Codigo Tipo de Impuesto Venta", "Precio Unitario Compra", "Codigo Tipo de Impuesto Compra", "Stock",
@@ -819,11 +763,6 @@ def _numero_si_puede(v: Any) -> Any:
 
 
 def exportar_formato_carga(db, ruta: str | Path) -> Path:
-    """
-    Inventario ACTUAL (stock descontado por las ventas) con las mismas columnas y el mismo
-    orden del archivo importado, listo para volver a subir al software de facturación.
-    Las columnas que el POS no maneja (unidad, moneda, impuestos…) se copian de la fila original.
-    """
     import json
     try:
         encabezados = json.loads(db.get_config("formato_carga_columnas", "")) or FORMATO_CARGA_DEFECTO
@@ -832,7 +771,6 @@ def exportar_formato_carga(db, ruta: str | Path) -> Path:
     mapeo = mapear_columnas(encabezados)
     campo_de = {i: c for c, i in mapeo.items()}
     productos = [dict(r) for r in db.q("SELECT * FROM productos WHERE activo=1 ORDER BY id")]
-    # Valor más común de cada columna técnica (para productos creados dentro del POS)
     comunes: dict[str, Any] = {}
     for p in productos:
         try:
@@ -869,7 +807,6 @@ def exportar_formato_carga(db, ruta: str | Path) -> Path:
                 v = o.get(h, comunes.get(h, ""))
             fila.append(v)
         ws.append(fila)
-    # Encabezado simple (igual al original) + anchos automáticos; sin filas extra para no romper la carga
     for j, h in enumerate(encabezados, start=1):
         ws.cell(row=1, column=j).font = Font(bold=True)
         largo = max([len(str(h))] + [len(str(ws.cell(row=r, column=j).value or "")) for r in range(2, ws.max_row + 1)])
@@ -881,7 +818,6 @@ def exportar_formato_carga(db, ruta: str | Path) -> Path:
 
 
 def generar_plantilla_inventario(ruta: str | Path) -> Path:
-    """Plantilla vacía con el mismo formato de 'Inventario General 01.xlsx'."""
     wb = Workbook()
     ws = wb.active
     ws.title = "INVENTARIO GENERAL"
@@ -897,15 +833,11 @@ def generar_plantilla_inventario(ruta: str | Path) -> Path:
     return Path(ruta)
 
 
-# --------------------------------------------------------------------------- #
-# v1.1 · Reportes de gestión, conteo físico
-# --------------------------------------------------------------------------- #
 DIMENSIONES = {"categoria": "Categoría", "talla": "Talla", "color": "Color", "marca": "Marca"}
 
 
 def exportar_reportes(db, ruta: str | Path, desde: str, hasta: str, nombre_periodo: str = "",
                       dias_quieta: int = 60, dias_analisis: int = 30, cobertura: int = 30, meses: int = 12) -> Path:
-    """Un libro con: mercancía quieta, ventas por categoría/talla/color/marca, comparativo y sugerido."""
     rep = ReporteExcel(_empresa(db))
     quieta = db.mercancia_quieta(dias_quieta)
     rep.agregar_hoja(
